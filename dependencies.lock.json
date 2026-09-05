@@ -27,13 +27,8 @@
     {
       "name": "mad-dom",
       "repository": "https://github.com/zhy0216/mad-dom.git",
-      "revision": "2672439a55f0f43f2fa30826b82ac88e91095fcf",
-      "patches": [
-        {
-          "file": "patches/mad-dom-react19.patch",
-          "sha256": "2deffb3e8446e5b891ace05ca997dbf65029829acd1972be37134f663394197d"
-        }
-      ],
+      "revision": "8f86acb64b159473c5b3c448979a1d2f0bba640f",
+      "patches": [],
       "packages": [
         {
           "directory": ".",

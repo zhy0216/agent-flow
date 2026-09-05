@@ -17,11 +17,11 @@ bun run check
 | Dependency | Git revision | Additional source input |
 | --- | --- | --- |
 | better-trigger | `943958579cd75853f5fd699156e41b075a2a0826` | None |
-| mad-dom | `2672439a55f0f43f2fa30826b82ac88e91095fcf` | SHA-256 verified [React 19 compatibility patch](../patches/mad-dom-react19.patch) |
+| mad-dom | `8f86acb64b159473c5b3c448979a1d2f0bba640f` | None |
 
-The mad-dom patch captures the upstream changes made through the authorized Herdr Codex agent: the real `HTMLIFrameElement` constructor, standard semantic element selection, `oninput` event-handler properties, type declarations, and React 19 interaction regressions. It includes its exact Bun lockfile change and regression fixtures. No upstream commit or publication is required to reproduce this checkout.
+The pinned mad-dom commit contains the changes made in its local source repository through Herdr: the real `HTMLIFrameElement` constructor, standard semantic element selection, `oninput` event-handler properties, type declarations, and React 19 interaction regressions. It includes the Bun lockfile change and regression fixtures and is available from the upstream repository. No additional patch is needed.
 
-Each dependency is fetched by its complete Git object ID into `.local-deps/sources`. The setup script verifies the checked-out revision and patch hashes before building. It uses the dependency's frozen Bun lockfile and Cargo's `--locked` mode. The native mad-dom binding is compiled for the host platform from the pinned Rust source; a developer's platform binary is never checked in or copied into another platform's install.
+Each dependency is fetched by its complete Git object ID into `.local-deps/sources`. The setup script verifies the checked-out revision before building. It uses the dependency's frozen Bun lockfile and Cargo's `--locked` mode. The native mad-dom binding is compiled for the host platform from the pinned Rust source; a developer's platform binary is never checked in or copied into another platform's install.
 
 The better-trigger build follows its worker dependency graph, including the SDK, internal packages and embedded dashboard. The SDK and embedded worker remain in the same source workspace, preserving their shared runtime context. The setup script checks exported build artifacts and resolves each linked dependency from its actual consuming workspace.
 
@@ -29,7 +29,9 @@ Bun link registration uses `.local-deps/bun-global`, and executable links use `.
 
 ## Updating or repairing a generated dependency
 
-Update the Git revision in the dependency manifest, or replace the checked-in patch and its SHA-256 value. Rerun setup, then run all applicable acceptance commands. A changed revision or patch produces a different generated checkout directory.
+For changes to a local technology stack, dispatch an agent through Herdr with its working directory set to that stack's actual source repository. For mad-dom, use `/Users/yang/workspace/mad-dom`. Apply the same workflow to other local dependencies; see [AGENTS.md](../AGENTS.md). Make and verify the fix in that repository, then use `setup:local` for local integration.
+
+Once the upstream fix has a fetchable commit, update the Git revision in the dependency manifest and remove any patch entries and files superseded by that revision. Do not create or extend checked-in patches as a substitute for editing the local source repository. Rerun setup, then run all applicable acceptance commands. A changed revision or patch list produces a different generated checkout directory.
 
 The script records a fingerprint of the pinned checkout plus patch. On later runs, it refuses to overwrite unexpected local changes in that generated directory. Preserve any wanted edits before removing the reported directory and rerunning setup. Generated source and build output can otherwise be recreated by removing `.local-deps` and `node_modules`, then running `bun run setup:deps`.
 

@@ -2,7 +2,7 @@
 
 日期：2026-09-05。范围为 [原方案](../plans/agent-flow-foundation/plan.md) 的 M0–M6：单用户、本地 worker、并发 1，单 Codex 执行后人工审核。远程多用户、团队权限、多机调度和自动交付仍属于原方案的 Roadmap。
 
-最终命令均退出 0：
+以下验收结果及源码 manifest 哈希记录依赖迁移前的验收；本次改为锁定上游提交的结果另见「上游改动与可复现性」。当时最终命令均退出 0：
 
 | Gate | 结果 |
 | --- | --- |
@@ -26,7 +26,7 @@
 | M3 Herdr | 显式 argv、caller context 和 returned ID；operation intent 先落库；pane、terminal、agent 进程及 worktree 归属校验 | adapter 测试覆盖错误身份、既有资源、移动、结果保存失败、重复操作与非强制清理；真实 Git 和 owned Herdr pane 验证 |
 | M4 workflow | 版本化、可注入依赖的 durable workflow；repo/slot lease；明确 blocked、不确定操作核对、取消和重试 | 实际生产 worker/runtime 的子进程故障套件；真实 Codex 全流程与运行期间 worker 重启；检查和实际文件共同决定结果 |
 | M5 产品闭环 | 项目/任务/worker/运行页面；URL 筛选；分页日志、SSE 与重连快照；人工处理、取消、重试、审核 | mad-dom React 交互测试及 Chromium；另在浏览器提交真实 Herdr 执行、处理目录信任提示、查看产物并审核完成 |
-| M6 工程交付 | 固定依赖 manifest/补丁；CI；隔离集成入口；开发、恢复与升级说明 | 独立 checkout 的 check、integration、browser；本地真实 Herdr gate；[README](../README.md) 与 [依赖说明](dependencies.md) |
+| M6 工程交付 | 固定依赖 manifest；CI；隔离集成入口；开发、恢复与升级说明 | 独立 checkout 的 check、integration、browser；本地真实 Herdr gate；[README](../README.md) 与 [依赖说明](dependencies.md) |
 
 业务 schema 为 `agent_flow`，worker ledger 为 `agent_flow_worker`，better-trigger 内部表为 `public`。数据库角色也叫 `agent_flow` 的实际环境中，显式 runtime search path 已验证不会误用同名业务表。最终 smoke run 为 `run_b79be985582a43e5bc30af34`，输出 `Agent Flow runtime is connected.`，状态 `completed`。
 
@@ -61,7 +61,11 @@ mad-dom 覆盖受控输入、项目与任务提交、幂等键保留、事件 se
 
 按用户要求，在当前 Herdr session 的独立 pane 中启动 Codex yolo 修改本地 mad-dom：真实 `HTMLIFrameElement`、标准语义元素映射、`oninput` 属性及 React 19 回归。上游完成 1058 项测试、24 项类型用例和 180 项兼容用例。应用删除了临时 iframe 构造器映射。
 
-上游没有提交或发布；相同变更已保存为 [固定补丁](../patches/mad-dom-react19.patch)，由 [依赖锁定文件](../dependencies.lock.json) 校验哈希。`setup:deps` 从 HTTPS 获取精确 revision，在当前平台编译原生模块；独立 checkout 不需要本机原仓库的绝对路径、全局 Bun 注册或预构建二进制。
+本次通过 Herdr 将 agent 直接派发到 `/Users/yang/workspace/mad-dom` 核对已有补丁。补丁已完整进入本地及远端 `main` 的提交 `8f86acb64b159473c5b3c448979a1d2f0bba640f`，反向应用检查通过，因此无需重复应用。旧 revision 加补丁与该提交的 Git tree 均为 `588a2cbd8e20a7e63733c219c163a58f54577159`，源码完全一致。[依赖锁定文件](../dependencies.lock.json) 已改为直接引用该上游提交，原补丁及其清单条目已移除。
+
+本次重新验证：在临时 Git 仓库通过 HTTPS 按清单中的完整 revision fetch 成功，取得相同源码 tree；本地 mad-dom 的冻结安装、`dev:build`、`check` 通过，24 项类型用例及 120 项 DOM/React 19 回归测试全部通过。agent-flow 的 9 项 Web 测试使用 `/Users/yang/workspace/mad-dom` 的实际依赖链接通过，lint 与 `git diff --check` 通过。本次未重跑表中的全套独立 checkout、数据库、浏览器及 Herdr 业务验收。
+
+所有本地技术栈均按 [AGENTS.md](../AGENTS.md) 通过 Herdr 直接修改对应源码仓库。`setup:deps` 从 HTTPS 获取精确 revision，在当前平台编译原生模块；独立 checkout 不需要本机原仓库的绝对路径、全局 Bun 注册或预构建二进制。
 
 Zebra 1.0.0 发布源码中的非 type-only import 需要在 server 和直接引用 server 的脚本/测试 TypeScript 配置中关闭 `verbatimModuleSyntax`；worker 生产源码仍使用严格配置。该已知发布边界不会进入 Web bundle。
 
