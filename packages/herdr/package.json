@@ -1,0 +1,14 @@
+{
+  "name": "@agent-flow/herdr",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "bun build src/index.ts --target bun --outdir dist",
+    "typecheck": "bun run --bun tsc --noEmit",
+    "test": "bun test"
+  }
+}

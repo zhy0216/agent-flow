@@ -1,0 +1,19 @@
+{
+  "name": "@agent-flow/worker",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/main.ts start",
+    "start": "bun src/main.ts start",
+    "check": "bun src/main.ts check",
+    "smoke": "bun src/main.ts smoke",
+    "build": "bun build src/main.ts --target bun --packages external --outdir dist",
+    "typecheck": "bun run --bun tsc --noEmit"
+  },
+  "dependencies": {
+    "@agent-flow/herdr": "workspace:*",
+    "@agent-flow/workflows": "workspace:*",
+    "@better-trigger/worker": "link:@better-trigger/worker"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "agent-flow",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.4.0",
+  "engines": {
+    "bun": ">=1.4.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "setup:local": "bun scripts/link-local.ts",
+    "dev": "bun run --bun turbo run dev --filter=@agent-flow/web --filter=@agent-flow/server",
+    "dev:worker": "bun run --filter @agent-flow/worker dev",
+    "worker:check": "bun run --filter @agent-flow/worker check",
+    "worker:smoke": "bun run --filter @agent-flow/worker smoke",
+    "build": "bun run --bun turbo run build",
+    "typecheck": "bun run --bun tsc --noEmit --project scripts/tsconfig.json && bun run --bun turbo run typecheck",
+    "test": "bun run --bun turbo run test",
+    "lint": "bun run --bun biome check .",
+    "format": "bun run --bun biome check --write .",
+    "check": "bun run lint && bun run typecheck && bun run test && bun run build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.12",
+    "@types/bun": "1.4.1",
+    "turbo": "2.10.12",
+    "typescript": "7.0.2"
+  }
+}

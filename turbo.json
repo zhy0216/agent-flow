@@ -1,0 +1,19 @@
+{
+  "$schema": "https://turborepo.dev/schema.json",
+  "globalDependencies": ["tsconfig.base.json", ".bun-version"],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", ".env*"],
+      "outputs": ["dist/**"],
+      "env": ["VITE_API_ORIGIN"]
+    },
+    "typecheck": { "dependsOn": ["^typecheck"], "outputs": [], "cache": false },
+    "test": { "dependsOn": ["^build"], "outputs": [], "cache": false },
+    "dev": {
+      "cache": false,
+      "persistent": true,
+      "passThroughEnv": ["HOST", "PORT", "API_PROXY_TARGET", "VITE_API_ORIGIN"]
+    }
+  }
+}

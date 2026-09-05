@@ -1,0 +1,16 @@
+{
+  "name": "@agent-flow/workflows",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "bun build src/index.ts --target bun --packages external --outdir dist",
+    "typecheck": "bun run --bun tsc --noEmit"
+  },
+  "dependencies": {
+    "better-trigger": "link:better-trigger"
+  }
+}
