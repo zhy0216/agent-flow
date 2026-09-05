@@ -20,6 +20,32 @@ import {
   type WorkerCommand,
 } from "@agent-flow/contracts";
 import { SQL } from "bun";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  exists,
+  gt,
+  ilike,
+  inArray,
+  isNull,
+  lt,
+  or,
+  sql,
+} from "drizzle-orm";
+import { drizzle } from "drizzle-orm/bun-sql";
+import { jsonbValue } from "./jsonb.ts";
+import {
+  issues,
+  outbox,
+  pairingCodes,
+  projects,
+  runActions,
+  runEvents,
+  runs,
+  workers,
+} from "./schema.ts";
 
 export { migrate } from "./migrations.ts";
 export const WORKFLOW_VERSION = "issue-agent/v1";
@@ -39,140 +65,266 @@ function id(prefix: string): string {
 export function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
-function dto<T>(row: unknown): T {
-  return JSON.parse(JSON.stringify(row)) as T;
+function required<T>(rows: T[], name: string): T {
+  const row = rows[0];
+  if (!row) throw new DomainError(404, "not_found", `${name} not found`);
+  return row;
 }
-function required<T>(rows: unknown[], name: string): T {
-  if (!rows.length)
-    throw new DomainError(404, "not_found", `${name} not found`);
-  return dto<T>(rows[0]);
+// Public projections deliberately exclude soft-delete and authentication fields.
+const projectColumns = {
+  id: projects.id,
+  name: projects.name,
+  repoKey: projects.repoKey,
+  worktree: projects.worktree,
+  checks: projects.checks,
+  createdAt: projects.createdAt,
+};
+const issueColumns = {
+  id: issues.id,
+  projectId: issues.projectId,
+  title: issues.title,
+  description: issues.description,
+  priority: issues.priority,
+  status: issues.status,
+  createdAt: issues.createdAt,
+  updatedAt: issues.updatedAt,
+};
+const runColumns = {
+  id: runs.id,
+  issueId: runs.issueId,
+  workerId: runs.workerId,
+  workflowVersion: runs.workflowVersion,
+  idempotencyKey: runs.idempotencyKey,
+  runtimeRunId: runs.runtimeRunId,
+  status: runs.status,
+  error: runs.error,
+  artifacts: runs.artifacts,
+  cancelRequested: runs.cancelRequested,
+  review: runs.review,
+  lastSequence: runs.lastSequence,
+  createdAt: runs.createdAt,
+  updatedAt: runs.updatedAt,
+};
+const workerColumns = {
+  id: workers.id,
+  name: workers.name,
+  online: sql<boolean>`(${workers.connected} AND ${workers.lastHeartbeat} > now() - interval '30 seconds')`,
+  capabilities: workers.capabilities,
+  capacity: workers.capacity,
+  currentRunId: workers.currentRunId,
+  lastHeartbeat: workers.lastHeartbeat,
+};
+type ProjectRow = Pick<
+  typeof projects.$inferSelect,
+  keyof typeof projectColumns
+>;
+type IssueRow = Pick<typeof issues.$inferSelect, keyof typeof issueColumns>;
+type RunRow = Pick<typeof runs.$inferSelect, keyof typeof runColumns>;
+type WorkerRow = Pick<
+  typeof workers.$inferSelect,
+  Exclude<keyof typeof workerColumns, "online">
+> & { online: boolean };
+function projectDto(row: ProjectRow): Project {
+  return { ...row, createdAt: row.createdAt.toISOString() };
 }
-const projectColumns = `id,name,repo_key AS "repoKey",worktree,checks,created_at AS "createdAt"`;
-const issueColumns = `id,project_id AS "projectId",title,description,priority,status,created_at AS "createdAt",updated_at AS "updatedAt"`;
-const runColumns = `id,issue_id AS "issueId",worker_id AS "workerId",workflow_version AS "workflowVersion",idempotency_key AS "idempotencyKey",runtime_run_id AS "runtimeRunId",status,error,artifacts,cancel_requested AS "cancelRequested",review,last_sequence AS "lastSequence",created_at AS "createdAt",updated_at AS "updatedAt"`;
-const workerColumns = `id,name,(connected AND last_heartbeat > now() - interval '30 seconds') AS online,capabilities,capacity,current_run_id AS "currentRunId",last_heartbeat AS "lastHeartbeat"`;
+function issueDto(row: IssueRow): Issue {
+  return {
+    ...row,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+function runDto(row: RunRow): Run {
+  return {
+    ...row,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+function workerDto(row: WorkerRow): Worker {
+  return { ...row, lastHeartbeat: row.lastHeartbeat?.toISOString() ?? null };
+}
+const activeRunStatuses = ["queued", "running", "blocked"] as const;
+
 export class Database {
   readonly sql: SQL;
+  readonly orm;
   constructor(url: string) {
     this.sql = new SQL(url, { max: 10 });
+    this.orm = drizzle({ client: this.sql });
   }
   async close() {
     await this.sql.close();
   }
   async projects(): Promise<Project[]> {
-    return dto(
-      await this.sql.unsafe(
-        `SELECT ${projectColumns} FROM agent_flow.projects WHERE deleted_at IS NULL ORDER BY created_at`,
-      ),
-    );
+    return (
+      await this.orm
+        .select(projectColumns)
+        .from(projects)
+        .where(isNull(projects.deletedAt))
+        .orderBy(asc(projects.createdAt))
+    ).map(projectDto);
   }
   async project(projectId: string): Promise<Project> {
-    return required(
-      await this.sql.unsafe(
-        `SELECT ${projectColumns} FROM agent_flow.projects WHERE deleted_at IS NULL AND id=$1`,
-        [projectId],
+    return projectDto(
+      required(
+        await this.orm
+          .select(projectColumns)
+          .from(projects)
+          .where(and(isNull(projects.deletedAt), eq(projects.id, projectId))),
+        "Project",
       ),
-      "Project",
     );
   }
   async createProject(input: CreateProject): Promise<Project> {
-    return required(
-      await this.sql.unsafe(
-        `INSERT INTO agent_flow.projects (id,name,repo_key,worktree,checks) VALUES ($1,$2,$3,$4,$5::text::jsonb) RETURNING ${projectColumns}`,
-        [
-          id("project"),
-          input.name,
-          input.repoKey,
-          input.worktree ?? true,
-          JSON.stringify(input.checks ?? []),
-        ],
+    return projectDto(
+      required(
+        await this.orm
+          .insert(projects)
+          .values({
+            id: id("project"),
+            name: input.name,
+            repoKey: input.repoKey,
+            worktree: input.worktree ?? true,
+            checks: jsonbValue(input.checks ?? []),
+          })
+          .returning(projectColumns),
+        "Project",
       ),
-      "Project",
     );
   }
   async updateProject(
     projectId: string,
     input: CreateProject,
   ): Promise<Project> {
-    return required(
-      await this.sql.unsafe(
-        `UPDATE agent_flow.projects SET name=$2,repo_key=$3,worktree=$4,checks=$5::text::jsonb WHERE deleted_at IS NULL AND id=$1 RETURNING ${projectColumns}`,
-        [
-          projectId,
-          input.name,
-          input.repoKey,
-          input.worktree ?? true,
-          JSON.stringify(input.checks ?? []),
-        ],
+    return projectDto(
+      required(
+        await this.orm
+          .update(projects)
+          .set({
+            name: input.name,
+            repoKey: input.repoKey,
+            worktree: input.worktree ?? true,
+            checks: jsonbValue(input.checks ?? []),
+          })
+          .where(and(isNull(projects.deletedAt), eq(projects.id, projectId)))
+          .returning(projectColumns),
+        "Project",
       ),
-      "Project",
     );
   }
   async deleteProject(projectId: string): Promise<void> {
-    await this.sql.begin(async (tx) => {
-      const projects =
-        await tx`SELECT id FROM agent_flow.projects WHERE deleted_at IS NULL AND id=${projectId} FOR UPDATE`;
-      required(projects, "Project");
-      const active =
-        await tx`SELECT r.id FROM agent_flow.runs r JOIN agent_flow.issues i ON r.issue_id=i.id WHERE i.project_id=${projectId} AND r.status IN ('queued','running','blocked')`;
+    await this.orm.transaction(async (tx) => {
+      required(
+        await tx
+          .select({ id: projects.id })
+          .from(projects)
+          .where(and(isNull(projects.deletedAt), eq(projects.id, projectId)))
+          .for("update"),
+        "Project",
+      );
+      const active = await tx
+        .select({ id: runs.id })
+        .from(runs)
+        .innerJoin(issues, eq(runs.issueId, issues.id))
+        .where(
+          and(
+            eq(issues.projectId, projectId),
+            inArray(runs.status, activeRunStatuses),
+          ),
+        );
       if (active.length)
         throw new DomainError(
           409,
           "active_run",
           "Cancel active runs before deleting this project",
         );
-      await tx`UPDATE agent_flow.issues SET deleted_at=now() WHERE project_id=${projectId}`;
-      await tx`UPDATE agent_flow.projects SET deleted_at=now() WHERE id=${projectId}`;
+      await tx
+        .update(issues)
+        .set({ deletedAt: sql`now()` })
+        .where(eq(issues.projectId, projectId));
+      await tx
+        .update(projects)
+        .set({ deletedAt: sql`now()` })
+        .where(eq(projects.id, projectId));
     });
   }
   async issues(
     filters: { projectId?: string; status?: string; q?: string } = {},
   ): Promise<Issue[]> {
-    return dto(
-      await this.sql.unsafe(
-        `SELECT ${issueColumns} FROM agent_flow.issues WHERE deleted_at IS NULL AND ($1::text IS NULL OR project_id=$1) AND ($2::text IS NULL OR status=$2) AND ($3::text IS NULL OR title ILIKE '%' || $3 || '%' OR description ILIKE '%' || $3 || '%') ORDER BY updated_at DESC,id`,
-        [filters.projectId ?? null, filters.status ?? null, filters.q ?? null],
-      ),
-    );
+    return (
+      await this.orm
+        .select(issueColumns)
+        .from(issues)
+        .where(
+          and(
+            isNull(issues.deletedAt),
+            filters.projectId === undefined
+              ? undefined
+              : eq(issues.projectId, filters.projectId),
+            filters.status === undefined
+              ? undefined
+              : eq(issues.status, sql`${filters.status}`),
+            filters.q === undefined
+              ? undefined
+              : or(
+                  ilike(issues.title, `%${filters.q}%`),
+                  ilike(issues.description, `%${filters.q}%`),
+                ),
+          ),
+        )
+        .orderBy(desc(issues.updatedAt), asc(issues.id))
+    ).map(issueDto);
   }
   async issue(issueId: string): Promise<Issue> {
-    return required(
-      await this.sql.unsafe(
-        `SELECT ${issueColumns} FROM agent_flow.issues WHERE deleted_at IS NULL AND id=$1`,
-        [issueId],
+    return issueDto(
+      required(
+        await this.orm
+          .select(issueColumns)
+          .from(issues)
+          .where(and(isNull(issues.deletedAt), eq(issues.id, issueId))),
+        "Issue",
       ),
-      "Issue",
     );
   }
   async createIssue(input: CreateIssue): Promise<Issue> {
-    return this.sql.begin(async (tx) => {
+    return this.orm.transaction(async (tx) => {
       required(
-        await tx`SELECT id FROM agent_flow.projects WHERE id=${input.projectId} AND deleted_at IS NULL FOR SHARE`,
+        await tx
+          .select({ id: projects.id })
+          .from(projects)
+          .where(
+            and(eq(projects.id, input.projectId), isNull(projects.deletedAt)),
+          )
+          .for("share"),
         "Project",
       );
-      return required<Issue>(
-        await tx.unsafe(
-          `INSERT INTO agent_flow.issues (id,project_id,title,description,priority,status) VALUES ($1,$2,$3,$4,$5,$6) RETURNING ${issueColumns}`,
-          [
-            id("issue"),
-            input.projectId,
-            input.title,
-            input.description ?? "",
-            input.priority ?? "medium",
-            input.status ?? "todo",
-          ],
+      return issueDto(
+        required(
+          await tx
+            .insert(issues)
+            .values({
+              id: id("issue"),
+              projectId: input.projectId,
+              title: input.title,
+              description: input.description ?? "",
+              priority: input.priority ?? "medium",
+              status: input.status ?? "todo",
+            })
+            .returning(issueColumns),
+          "Issue",
         ),
-        "Issue",
       );
     });
   }
   async updateIssue(issueId: string, input: CreateIssue): Promise<Issue> {
-    return this.sql.begin(async (tx) => {
-      const current = required<Issue>(
-        await tx.unsafe(
-          `SELECT ${issueColumns} FROM agent_flow.issues WHERE deleted_at IS NULL AND id=$1 FOR UPDATE`,
-          [issueId],
-        ),
+    return this.orm.transaction(async (tx) => {
+      const current = required(
+        await tx
+          .select(issueColumns)
+          .from(issues)
+          .where(and(isNull(issues.deletedAt), eq(issues.id, issueId)))
+          .for("update"),
         "Issue",
       );
       if (current.projectId !== input.projectId)
@@ -188,8 +340,15 @@ export class Database {
           "invalid_transition",
           `Cannot move issue from ${current.status} to ${status}`,
         );
-      const active =
-        await tx`SELECT id FROM agent_flow.runs WHERE issue_id=${issueId} AND status IN ('queued','running','blocked')`;
+      const active = await tx
+        .select({ id: runs.id })
+        .from(runs)
+        .where(
+          and(
+            eq(runs.issueId, issueId),
+            inArray(runs.status, activeRunStatuses),
+          ),
+        );
       if (active.length && status !== current.status)
         throw new DomainError(
           409,
@@ -197,77 +356,112 @@ export class Database {
           "Issue status is controlled by its active run",
         );
       if (status === "done") {
-        const approved =
-          await tx`SELECT review FROM agent_flow.runs WHERE issue_id=${issueId} ORDER BY created_at DESC LIMIT 1`;
-        if (approved.length && approved[0].review !== "approved")
+        const approved = await tx
+          .select({ review: runs.review })
+          .from(runs)
+          .where(eq(runs.issueId, issueId))
+          .orderBy(desc(runs.createdAt))
+          .limit(1);
+        if (approved[0] && approved[0].review !== "approved")
           throw new DomainError(
             409,
             "review_required",
             "Approve the latest run before marking this issue done",
           );
       }
-      return required<Issue>(
-        await tx.unsafe(
-          `UPDATE agent_flow.issues SET title=$2,description=$3,priority=$4,status=$5,updated_at=now() WHERE id=$1 RETURNING ${issueColumns}`,
-          [
-            issueId,
-            input.title,
-            input.description ?? current.description,
-            input.priority ?? current.priority,
-            status,
-          ],
+      return issueDto(
+        required(
+          await tx
+            .update(issues)
+            .set({
+              title: input.title,
+              description: input.description ?? current.description,
+              priority: input.priority ?? current.priority,
+              status,
+              updatedAt: sql`now()`,
+            })
+            .where(eq(issues.id, issueId))
+            .returning(issueColumns),
+          "Issue",
         ),
-        "Issue",
       );
     });
   }
   async deleteIssue(issueId: string): Promise<void> {
-    await this.sql.begin(async (tx) => {
+    await this.orm.transaction(async (tx) => {
       required(
-        await tx`SELECT id FROM agent_flow.issues WHERE deleted_at IS NULL AND id=${issueId} FOR UPDATE`,
+        await tx
+          .select({ id: issues.id })
+          .from(issues)
+          .where(and(isNull(issues.deletedAt), eq(issues.id, issueId)))
+          .for("update"),
         "Issue",
       );
-      if (
-        (
-          await tx`SELECT id FROM agent_flow.runs WHERE issue_id=${issueId} AND status IN ('queued','running','blocked')`
-        ).length
-      )
+      const active = await tx
+        .select({ id: runs.id })
+        .from(runs)
+        .where(
+          and(
+            eq(runs.issueId, issueId),
+            inArray(runs.status, activeRunStatuses),
+          ),
+        );
+      if (active.length)
         throw new DomainError(
           409,
           "active_run",
           "Cancel the active run before deleting this issue",
         );
-      await tx`UPDATE agent_flow.issues SET deleted_at=now() WHERE id=${issueId}`;
+      await tx
+        .update(issues)
+        .set({ deletedAt: sql`now()` })
+        .where(eq(issues.id, issueId));
     });
   }
   async workers(): Promise<Worker[]> {
-    return dto(
-      await this.sql.unsafe(
-        `SELECT ${workerColumns} FROM agent_flow.workers ORDER BY name`,
-      ),
-    );
+    return (
+      await this.orm
+        .select(workerColumns)
+        .from(workers)
+        .orderBy(asc(workers.name))
+    ).map(workerDto);
   }
   async worker(workerId: string): Promise<Worker> {
-    return required(
-      await this.sql.unsafe(
-        `SELECT ${workerColumns} FROM agent_flow.workers WHERE id=$1`,
-        [workerId],
+    return workerDto(
+      required(
+        await this.orm
+          .select(workerColumns)
+          .from(workers)
+          .where(eq(workers.id, workerId)),
+        "Worker",
       ),
-      "Worker",
     );
   }
   async createPairing(name?: string) {
     const code = randomBytes(24).toString("base64url");
-    const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
-    await this
-      .sql`INSERT INTO agent_flow.pairing_codes (code_hash,name,expires_at) VALUES (${hashToken(code)},${name ?? null},${expiresAt})`;
-    return { code, expiresAt };
+    const expiresAt = new Date(Date.now() + 10 * 60_000);
+    await this.orm.insert(pairingCodes).values({
+      codeHash: hashToken(code),
+      name: name ?? null,
+      expiresAt,
+    });
+    return { code, expiresAt: expiresAt.toISOString() };
   }
   async pair(code: string, name: string) {
-    return this.sql.begin(async (tx) => {
-      const codes =
-        await tx`UPDATE agent_flow.pairing_codes SET consumed_at=now() WHERE code_hash=${hashToken(code)} AND consumed_at IS NULL AND expires_at > now() RETURNING name`;
-      if (!codes.length)
+    return this.orm.transaction(async (tx) => {
+      const codes = await tx
+        .update(pairingCodes)
+        .set({ consumedAt: sql`now()` })
+        .where(
+          and(
+            eq(pairingCodes.codeHash, hashToken(code)),
+            isNull(pairingCodes.consumedAt),
+            gt(pairingCodes.expiresAt, sql`now()`),
+          ),
+        )
+        .returning({ name: pairingCodes.name });
+      const pairing = codes[0];
+      if (!pairing)
         throw new DomainError(
           401,
           "invalid_pairing",
@@ -275,13 +469,19 @@ export class Database {
         );
       const workerId = id("worker");
       const token = randomBytes(32).toString("base64url");
-      await tx`INSERT INTO agent_flow.workers (id,name,token_hash) VALUES (${workerId},${codes[0].name ?? name},${hashToken(token)})`;
+      await tx.insert(workers).values({
+        id: workerId,
+        name: pairing.name ?? name,
+        tokenHash: hashToken(token),
+      });
       return { workerId, token };
     });
   }
   async authenticate(token: string): Promise<string | null> {
-    const rows = await this
-      .sql`SELECT id FROM agent_flow.workers WHERE token_hash=${hashToken(token)}`;
+    const rows = await this.orm
+      .select({ id: workers.id })
+      .from(workers)
+      .where(eq(workers.tokenHash, hashToken(token)));
     return rows[0]?.id ?? null;
   }
   async register(
@@ -294,19 +494,23 @@ export class Database {
       currentRunId?: string | null;
     },
   ): Promise<Worker> {
-    return required(
-      await this.sql.unsafe(
-        `UPDATE agent_flow.workers SET name=$3,capabilities=$4::text::jsonb,capacity=$5,current_run_id=$6,connected=true,connection_id=$2,last_heartbeat=now() WHERE id=$1 RETURNING ${workerColumns}`,
-        [
-          workerId,
-          connectionId,
-          input.name,
-          JSON.stringify(input.capabilities),
-          input.capacity,
-          input.currentRunId ?? null,
-        ],
+    return workerDto(
+      required(
+        await this.orm
+          .update(workers)
+          .set({
+            name: input.name,
+            capabilities: jsonbValue(input.capabilities),
+            capacity: input.capacity,
+            currentRunId: input.currentRunId ?? null,
+            connected: true,
+            connectionId,
+            lastHeartbeat: sql`now()`,
+          })
+          .where(eq(workers.id, workerId))
+          .returning(workerColumns),
+        "Worker",
       ),
-      "Worker",
     );
   }
   async heartbeat(
@@ -315,56 +519,111 @@ export class Database {
     capacity: number,
     currentRunId?: string | null,
   ) {
-    await this
-      .sql`UPDATE agent_flow.workers SET last_heartbeat=now(),capacity=${capacity},current_run_id=${currentRunId ?? null} WHERE id=${workerId} AND connection_id=${connectionId} AND connected=true`;
+    await this.orm
+      .update(workers)
+      .set({
+        lastHeartbeat: sql`now()`,
+        capacity,
+        currentRunId: currentRunId ?? null,
+      })
+      .where(
+        and(
+          eq(workers.id, workerId),
+          eq(workers.connectionId, connectionId),
+          eq(workers.connected, true),
+        ),
+      );
   }
   async disconnect(workerId: string, connectionId: string) {
-    await this
-      .sql`UPDATE agent_flow.workers SET connected=false,capacity=0 WHERE id=${workerId} AND connection_id=${connectionId}`;
+    await this.orm
+      .update(workers)
+      .set({ connected: false, capacity: 0 })
+      .where(
+        and(eq(workers.id, workerId), eq(workers.connectionId, connectionId)),
+      );
   }
   async expireWorkers(): Promise<string[]> {
-    const rows = await this
-      .sql`UPDATE agent_flow.workers SET connected=false,capacity=0 WHERE connected=true AND last_heartbeat < now() - interval '30 seconds' RETURNING id`;
-    return rows.map((row: { id: string }) => row.id);
+    const rows = await this.orm
+      .update(workers)
+      .set({ connected: false, capacity: 0 })
+      .where(
+        and(
+          eq(workers.connected, true),
+          lt(workers.lastHeartbeat, sql`now() - interval '30 seconds'`),
+        ),
+      )
+      .returning({ id: workers.id });
+    return rows.map((row) => row.id);
   }
   async resetConnections() {
-    await this.sql`UPDATE agent_flow.workers SET connected=false,capacity=0`;
+    await this.orm.update(workers).set({ connected: false, capacity: 0 });
   }
   async runs(issueId?: string): Promise<Run[]> {
-    return dto(
-      await this.sql.unsafe(
-        `SELECT ${runColumns} FROM agent_flow.runs WHERE EXISTS (SELECT 1 FROM agent_flow.issues i WHERE i.id=runs.issue_id AND i.deleted_at IS NULL) AND ($1::text IS NULL OR issue_id=$1) ORDER BY created_at DESC,id`,
-        [issueId ?? null],
-      ),
-    );
+    return (
+      await this.orm
+        .select(runColumns)
+        .from(runs)
+        .where(
+          and(
+            exists(
+              this.orm
+                .select({ id: issues.id })
+                .from(issues)
+                .where(
+                  and(eq(issues.id, runs.issueId), isNull(issues.deletedAt)),
+                ),
+            ),
+            issueId === undefined ? undefined : eq(runs.issueId, issueId),
+          ),
+        )
+        .orderBy(desc(runs.createdAt), asc(runs.id))
+    ).map(runDto);
   }
   async run(runId: string): Promise<Run> {
-    return required(
-      await this.sql.unsafe(
-        `SELECT ${runColumns} FROM agent_flow.runs WHERE id=$1 AND EXISTS (SELECT 1 FROM agent_flow.issues i WHERE i.id=runs.issue_id AND i.deleted_at IS NULL)`,
-        [runId],
+    return runDto(
+      required(
+        await this.orm
+          .select(runColumns)
+          .from(runs)
+          .where(
+            and(
+              eq(runs.id, runId),
+              exists(
+                this.orm
+                  .select({ id: issues.id })
+                  .from(issues)
+                  .where(
+                    and(eq(issues.id, runs.issueId), isNull(issues.deletedAt)),
+                  ),
+              ),
+            ),
+          ),
+        "Run",
       ),
-      "Run",
     );
   }
   async submitRun(input: SubmitRun): Promise<Run> {
-    return this.sql.begin(async (tx) => {
+    return this.orm.transaction(async (tx) => {
       // Key lock covers concurrent retries before the unique run row exists.
-      await tx`SELECT pg_advisory_xact_lock(hashtextextended(${input.idempotencyKey},0))`;
-      const existing = await tx.unsafe(
-        `SELECT ${runColumns} FROM agent_flow.runs WHERE idempotency_key=$1`,
-        [input.idempotencyKey],
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.idempotencyKey},0))`,
       );
-      if (existing.length) {
-        const run = dto<Run>(existing[0]);
+      const existing = await tx
+        .select(runColumns)
+        .from(runs)
+        .where(eq(runs.idempotencyKey, input.idempotencyKey));
+      if (existing[0]) {
+        const run = runDto(existing[0]);
         if (run.issueId !== input.issueId || run.workerId !== input.workerId)
           throw new DomainError(
             409,
             "idempotency_conflict",
             "Idempotency key was used for a different request",
           );
-        const visible =
-          await tx`SELECT id FROM agent_flow.issues WHERE id=${run.issueId} AND deleted_at IS NULL`;
+        const visible = await tx
+          .select({ id: issues.id })
+          .from(issues)
+          .where(and(eq(issues.id, run.issueId), isNull(issues.deletedAt)));
         if (!visible.length)
           throw new DomainError(
             410,
@@ -373,26 +632,37 @@ export class Database {
           );
         return run;
       }
-      const issue = required<Issue>(
-        await tx.unsafe(
-          `SELECT ${issueColumns} FROM agent_flow.issues WHERE deleted_at IS NULL AND id=$1 FOR UPDATE`,
-          [input.issueId],
+      const issue = issueDto(
+        required(
+          await tx
+            .select(issueColumns)
+            .from(issues)
+            .where(and(isNull(issues.deletedAt), eq(issues.id, input.issueId)))
+            .for("update"),
+          "Issue",
         ),
-        "Issue",
       );
-      const project = required<Project>(
-        await tx.unsafe(
-          `SELECT ${projectColumns} FROM agent_flow.projects WHERE deleted_at IS NULL AND id=$1 FOR SHARE`,
-          [issue.projectId],
+      const project = projectDto(
+        required(
+          await tx
+            .select(projectColumns)
+            .from(projects)
+            .where(
+              and(isNull(projects.deletedAt), eq(projects.id, issue.projectId)),
+            )
+            .for("share"),
+          "Project",
         ),
-        "Project",
       );
-      const worker = required<Worker>(
-        await tx.unsafe(
-          `SELECT ${workerColumns} FROM agent_flow.workers WHERE id=$1 FOR UPDATE`,
-          [input.workerId],
+      const worker = workerDto(
+        required(
+          await tx
+            .select(workerColumns)
+            .from(workers)
+            .where(eq(workers.id, input.workerId))
+            .for("update"),
+          "Worker",
         ),
-        "Worker",
       );
       if (issue.status === "done")
         throw new DomainError(
@@ -414,28 +684,36 @@ export class Database {
           "worker_busy",
           "Worker has no free execution slot",
         );
-      if (
-        (
-          await tx`SELECT id FROM agent_flow.runs WHERE (issue_id=${issue.id} OR worker_id=${worker.id}) AND status IN ('queued','running','blocked')`
-        ).length
-      )
+      const active = await tx
+        .select({ id: runs.id })
+        .from(runs)
+        .where(
+          and(
+            or(eq(runs.issueId, issue.id), eq(runs.workerId, worker.id)),
+            inArray(runs.status, activeRunStatuses),
+          ),
+        );
+      if (active.length)
         throw new DomainError(
           409,
           "active_run",
           "This issue or worker already has an active run",
         );
-      const run = required<Run>(
-        await tx.unsafe(
-          `INSERT INTO agent_flow.runs (id,issue_id,worker_id,workflow_version,idempotency_key,status) VALUES ($1,$2,$3,$4,$5,'queued') RETURNING ${runColumns}`,
-          [
-            id("run"),
-            issue.id,
-            worker.id,
-            WORKFLOW_VERSION,
-            input.idempotencyKey,
-          ],
+      const run = runDto(
+        required(
+          await tx
+            .insert(runs)
+            .values({
+              id: id("run"),
+              issueId: issue.id,
+              workerId: worker.id,
+              workflowVersion: WORKFLOW_VERSION,
+              idempotencyKey: input.idempotencyKey,
+              status: "queued",
+            })
+            .returning(runColumns),
+          "Run",
         ),
-        "Run",
       );
       const command: WorkerCommand = {
         version: 1,
@@ -445,33 +723,59 @@ export class Database {
         runId: run.id,
         payload: { run, issue, project },
       };
-      await tx`INSERT INTO agent_flow.outbox (id,worker_id,run_id,command) VALUES (${command.requestId},${worker.id},${run.id},${JSON.stringify(command)}::text::jsonb)`;
-      await tx`UPDATE agent_flow.issues SET status='in-progress',updated_at=now() WHERE id=${issue.id}`;
+      await tx.insert(outbox).values({
+        id: command.requestId,
+        workerId: worker.id,
+        runId: run.id,
+        command: jsonbValue(command),
+      });
+      await tx
+        .update(issues)
+        .set({ status: "in-progress", updatedAt: sql`now()` })
+        .where(eq(issues.id, issue.id));
       return run;
     });
   }
   async pendingCommands(workerId: string): Promise<WorkerCommand[]> {
-    const rows = await this
-      .sql`SELECT command FROM agent_flow.outbox WHERE worker_id=${workerId} AND acked_at IS NULL ORDER BY created_at,id`;
-    return rows.map((row: { command: WorkerCommand }) => row.command);
+    const rows = await this.orm
+      .select({ command: outbox.command })
+      .from(outbox)
+      .where(and(eq(outbox.workerId, workerId), isNull(outbox.ackedAt)))
+      .orderBy(asc(outbox.createdAt), asc(outbox.id));
+    return rows.map((row) => row.command);
   }
   async acknowledge(
     workerId: string,
     commandId: string,
     runtimeRunId?: string,
   ) {
-    await this.sql.begin(async (tx) => {
-      const commands =
-        await tx`UPDATE agent_flow.outbox SET acked_at=COALESCE(acked_at,now()) WHERE id=${commandId} AND worker_id=${workerId} RETURNING run_id,command`;
-      if (!commands.length)
+    await this.orm.transaction(async (tx) => {
+      const commands = await tx
+        .update(outbox)
+        .set({ ackedAt: sql`COALESCE(${outbox.ackedAt},now())` })
+        .where(and(eq(outbox.id, commandId), eq(outbox.workerId, workerId)))
+        .returning({ runId: outbox.runId });
+      const command = commands[0];
+      if (!command)
         throw new DomainError(
           404,
           "unknown_command",
           "Command does not belong to this worker",
         );
       if (runtimeRunId) {
-        const updated =
-          await tx`UPDATE agent_flow.runs SET runtime_run_id=${runtimeRunId},updated_at=now() WHERE id=${commands[0].run_id} AND (runtime_run_id IS NULL OR runtime_run_id=${runtimeRunId}) RETURNING id`;
+        const updated = await tx
+          .update(runs)
+          .set({ runtimeRunId, updatedAt: sql`now()` })
+          .where(
+            and(
+              eq(runs.id, command.runId),
+              or(
+                isNull(runs.runtimeRunId),
+                eq(runs.runtimeRunId, runtimeRunId),
+              ),
+            ),
+          )
+          .returning({ id: runs.id });
         if (!updated.length)
           throw new DomainError(
             409,
@@ -486,10 +790,19 @@ export class Database {
     event: RunEvent,
     connectionId?: string,
   ): Promise<number> {
-    return this.sql.begin(async (tx) => {
+    return this.orm.transaction(async (tx) => {
       if (connectionId) {
-        const owner =
-          await tx`SELECT id FROM agent_flow.workers WHERE id=${workerId} AND connection_id=${connectionId} AND connected=true FOR SHARE`;
+        const owner = await tx
+          .select({ id: workers.id })
+          .from(workers)
+          .where(
+            and(
+              eq(workers.id, workerId),
+              eq(workers.connectionId, connectionId),
+              eq(workers.connected, true),
+            ),
+          )
+          .for("share");
         if (!owner.length)
           throw new DomainError(
             409,
@@ -497,16 +810,27 @@ export class Database {
             "Worker connection has been replaced or expired",
           );
       }
-      const run = required<Run>(
-        await tx.unsafe(
-          `SELECT ${runColumns} FROM agent_flow.runs WHERE id=$1 AND worker_id=$2 FOR UPDATE`,
-          [event.runId, workerId],
-        ),
+      const run = required(
+        await tx
+          .select(runColumns)
+          .from(runs)
+          .where(and(eq(runs.id, event.runId), eq(runs.workerId, workerId)))
+          .for("update"),
         "Run",
       );
       if (event.sequence <= run.lastSequence) {
-        const duplicate =
-          await tx`SELECT 1 FROM agent_flow.run_events WHERE run_id=${run.id} AND sequence=${event.sequence} AND type=${event.type} AND timestamp=${event.timestamp}::timestamptz AND payload=${JSON.stringify(event.payload)}::text::jsonb`;
+        const duplicate = await tx
+          .select({ sequence: runEvents.sequence })
+          .from(runEvents)
+          .where(
+            and(
+              eq(runEvents.runId, run.id),
+              eq(runEvents.sequence, event.sequence),
+              eq(runEvents.type, event.type),
+              eq(runEvents.timestamp, sql`${event.timestamp}::timestamptz`),
+              eq(runEvents.payload, jsonbValue(event.payload)),
+            ),
+          );
         if (!duplicate.length)
           throw new DomainError(
             409,
@@ -557,7 +881,10 @@ export class Database {
             };
           });
         }
-        await tx`UPDATE agent_flow.runs SET status=${status},error=${error},artifacts=${JSON.stringify(artifacts)}::text::jsonb WHERE id=${run.id}`;
+        await tx
+          .update(runs)
+          .set({ status, error, artifacts: jsonbValue(artifacts) })
+          .where(eq(runs.id, run.id));
         const issueStatus =
           status === "succeeded"
             ? "in-review"
@@ -565,21 +892,45 @@ export class Database {
               ? "todo"
               : "in-progress";
         if (status !== run.status) {
-          await tx`UPDATE agent_flow.issues SET status=${issueStatus},updated_at=now() WHERE id=${run.issueId}`;
+          await tx
+            .update(issues)
+            .set({ status: issueStatus, updatedAt: sql`now()` })
+            .where(eq(issues.id, run.issueId));
         }
       }
-      await tx`INSERT INTO agent_flow.run_events (run_id,sequence,type,timestamp,payload) VALUES (${run.id},${event.sequence},${event.type},${event.timestamp},${JSON.stringify(event.payload)}::text::jsonb)`;
-      await tx`UPDATE agent_flow.runs SET last_sequence=${event.sequence},updated_at=now() WHERE id=${run.id}`;
+      await tx.insert(runEvents).values({
+        runId: run.id,
+        sequence: event.sequence,
+        type: event.type,
+        timestamp: sql`${event.timestamp}::timestamptz`,
+        payload: jsonbValue(event.payload),
+      });
+      await tx
+        .update(runs)
+        .set({ lastSequence: event.sequence, updatedAt: sql`now()` })
+        .where(eq(runs.id, run.id));
       return event.sequence;
     });
   }
   async events(runId: string, after = 0, limit = 100): Promise<EventPage> {
     await this.run(runId);
-    const rows = dto<RunEvent[]>(
-      await this
-        .sql`SELECT run_id AS "runId",sequence,type,timestamp,payload FROM agent_flow.run_events WHERE run_id=${runId} AND sequence > ${after} ORDER BY sequence LIMIT ${limit + 1}`,
-    );
-    const events = rows.slice(0, limit);
+    const rows = await this.orm
+      .select({
+        runId: runEvents.runId,
+        sequence: runEvents.sequence,
+        type: runEvents.type,
+        timestamp: runEvents.timestamp,
+        payload: runEvents.payload,
+      })
+      .from(runEvents)
+      .where(and(eq(runEvents.runId, runId), gt(runEvents.sequence, after)))
+      .orderBy(asc(runEvents.sequence))
+      .limit(limit + 1);
+    const events = rows
+      .slice(0, limit)
+      .map(
+        (row): RunEvent => ({ ...row, timestamp: row.timestamp.toISOString() }),
+      );
     return {
       events,
       nextCursor: events.at(-1)?.sequence ?? after,
@@ -588,16 +939,35 @@ export class Database {
   }
   async command(
     runId: string,
-    type: "run.cancel" | "run.resolve",
-    payload: { reason: string } | ResolveRun,
+    ...[type, payload]:
+      | [type: "run.cancel", payload: { reason: string }]
+      | [type: "run.resolve", payload: ResolveRun]
   ): Promise<Run> {
-    return this.sql.begin(async (tx) => {
-      const run = required<Run>(
-        await tx.unsafe(
-          `SELECT ${runColumns} FROM agent_flow.runs WHERE id=$1 AND EXISTS (SELECT 1 FROM agent_flow.issues i WHERE i.id=runs.issue_id AND i.deleted_at IS NULL) FOR UPDATE`,
-          [runId],
+    return this.orm.transaction(async (tx) => {
+      const run = runDto(
+        required(
+          await tx
+            .select(runColumns)
+            .from(runs)
+            .where(
+              and(
+                eq(runs.id, runId),
+                exists(
+                  tx
+                    .select({ id: issues.id })
+                    .from(issues)
+                    .where(
+                      and(
+                        eq(issues.id, runs.issueId),
+                        isNull(issues.deletedAt),
+                      ),
+                    ),
+                ),
+              ),
+            )
+            .for("update"),
+          "Run",
         ),
-        "Run",
       );
       if (["succeeded", "failed", "cancelled"].includes(run.status))
         throw new DomainError(
@@ -612,29 +982,51 @@ export class Database {
           "Run is not waiting for manual resolution",
         );
       if (type === "run.cancel" && run.cancelRequested) return run;
-      if (
-        type === "run.resolve" &&
-        (
-          await tx`SELECT id FROM agent_flow.outbox WHERE run_id=${runId} AND command->>'type'='run.resolve' AND acked_at IS NULL`
-        ).length
-      )
-        throw new DomainError(
-          409,
-          "resolution_pending",
-          "A resolution is already pending delivery",
-        );
-      const command = {
-        version: 1,
-        type,
+      if (type === "run.resolve") {
+        const pending = await tx
+          .select({ id: outbox.id })
+          .from(outbox)
+          .where(
+            and(
+              eq(outbox.runId, runId),
+              sql`${outbox.command}->>'type' = 'run.resolve'`,
+              isNull(outbox.ackedAt),
+            ),
+          );
+        if (pending.length)
+          throw new DomainError(
+            409,
+            "resolution_pending",
+            "A resolution is already pending delivery",
+          );
+      }
+      const envelope = {
+        version: 1 as const,
         requestId: id("command"),
         workerId: run.workerId,
         runId,
-        payload,
       };
-      await tx`INSERT INTO agent_flow.outbox (id,worker_id,run_id,command) VALUES (${command.requestId},${run.workerId},${run.id},${JSON.stringify(command)}::text::jsonb)`;
-      await tx`INSERT INTO agent_flow.run_actions (id,run_id,type,payload) VALUES (${id("action")},${run.id},${type},${JSON.stringify(payload)}::text::jsonb)`;
+      const command: WorkerCommand =
+        type === "run.cancel"
+          ? { ...envelope, type, payload }
+          : { ...envelope, type, payload };
+      await tx.insert(outbox).values({
+        id: command.requestId,
+        workerId: run.workerId,
+        runId: run.id,
+        command: jsonbValue(command),
+      });
+      await tx.insert(runActions).values({
+        id: id("action"),
+        runId: run.id,
+        type,
+        payload: jsonbValue(payload),
+      });
       if (type === "run.cancel")
-        await tx`UPDATE agent_flow.runs SET cancel_requested=true,updated_at=now() WHERE id=${run.id}`;
+        await tx
+          .update(runs)
+          .set({ cancelRequested: true, updatedAt: sql`now()` })
+          .where(eq(runs.id, run.id));
       return {
         ...run,
         cancelRequested: type === "run.cancel" || run.cancelRequested,
@@ -663,13 +1055,31 @@ export class Database {
     decision: "approve" | "reject",
     note: string,
   ): Promise<Run> {
-    return this.sql.begin(async (tx) => {
-      const run = required<Run>(
-        await tx.unsafe(
-          `SELECT ${runColumns} FROM agent_flow.runs WHERE id=$1 AND EXISTS (SELECT 1 FROM agent_flow.issues i WHERE i.id=runs.issue_id AND i.deleted_at IS NULL) FOR UPDATE`,
-          [runId],
+    return this.orm.transaction(async (tx) => {
+      const run = runDto(
+        required(
+          await tx
+            .select(runColumns)
+            .from(runs)
+            .where(
+              and(
+                eq(runs.id, runId),
+                exists(
+                  tx
+                    .select({ id: issues.id })
+                    .from(issues)
+                    .where(
+                      and(
+                        eq(issues.id, runs.issueId),
+                        isNull(issues.deletedAt),
+                      ),
+                    ),
+                ),
+              ),
+            )
+            .for("update"),
+          "Run",
         ),
-        "Run",
       );
       if (run.status !== "succeeded")
         throw new DomainError(
@@ -677,9 +1087,17 @@ export class Database {
           "review_unavailable",
           "Only successful runs can be reviewed",
         );
-      await tx`SELECT id FROM agent_flow.issues WHERE id=${run.issueId} FOR UPDATE`;
-      const latest =
-        await tx`SELECT id FROM agent_flow.runs WHERE issue_id=${run.issueId} ORDER BY created_at DESC,id LIMIT 1`;
+      await tx
+        .select({ id: issues.id })
+        .from(issues)
+        .where(eq(issues.id, run.issueId))
+        .for("update");
+      const latest = await tx
+        .select({ id: runs.id })
+        .from(runs)
+        .where(eq(runs.issueId, run.issueId))
+        .orderBy(desc(runs.createdAt), asc(runs.id))
+        .limit(1);
       if (latest[0]?.id !== runId)
         throw new DomainError(
           409,
@@ -694,9 +1112,23 @@ export class Database {
           "This run has already been reviewed",
         );
       if (!run.review) {
-        await tx`UPDATE agent_flow.runs SET review=${review},updated_at=now() WHERE id=${run.id}`;
-        await tx`UPDATE agent_flow.issues SET status=${decision === "approve" ? "done" : "todo"},updated_at=now() WHERE id=${run.issueId}`;
-        await tx`INSERT INTO agent_flow.run_actions (id,run_id,type,payload) VALUES (${id("action")},${run.id},'review',${JSON.stringify({ decision, note })}::text::jsonb)`;
+        await tx
+          .update(runs)
+          .set({ review, updatedAt: sql`now()` })
+          .where(eq(runs.id, run.id));
+        await tx
+          .update(issues)
+          .set({
+            status: decision === "approve" ? "done" : "todo",
+            updatedAt: sql`now()`,
+          })
+          .where(eq(issues.id, run.issueId));
+        await tx.insert(runActions).values({
+          id: id("action"),
+          runId: run.id,
+          type: "review",
+          payload: jsonbValue({ decision, note }),
+        });
       }
       return { ...run, review };
     });

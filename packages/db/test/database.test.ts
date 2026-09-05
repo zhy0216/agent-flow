@@ -52,8 +52,8 @@ suite("PostgreSQL business persistence and transactions", () => {
   test("migrations are repeatable and isolated from runtime tables", async () => {
     await migrate(db.sql);
     expect(
-      (await db.sql`SELECT version FROM agent_flow.migrations`).length,
-    ).toBe(2);
+      (await db.sql`SELECT hash FROM agent_flow.__drizzle_migrations`).length,
+    ).toBe(1);
     expect(
       (
         await db.sql`SELECT table_name FROM information_schema.tables WHERE table_schema='agent_flow'`
@@ -82,9 +82,173 @@ suite("PostgreSQL business persistence and transactions", () => {
       await db.sql`SELECT token_hash FROM agent_flow.workers WHERE id=${workerId}`;
     expect(rows[0].token_hash).toBe(hashToken(token));
     expect(rows[0].token_hash).not.toBe(token);
+    const worker = await db.worker(workerId);
+    expect(worker).toEqual({
+      id: workerId,
+      name: expect.any(String),
+      online: false,
+      capabilities: [],
+      capacity: 0,
+      currentRunId: null,
+      lastHeartbeat: null,
+    });
+    expect((await db.workers()).find((item) => item.id === workerId)).toEqual(
+      worker,
+    );
     const expired = await db.createPairing();
     await db.sql`UPDATE agent_flow.pairing_codes SET expires_at=now()-interval '1 second' WHERE code_hash=${hashToken(expired.code)}`;
     await expect(db.pair(expired.code, "expired")).rejects.toThrow("expired");
+  });
+  test("public records preserve ISO dates, nullable fields and JSON snapshots", async () => {
+    const { project, issue, workerId } = await setup();
+    const checks = [
+      ["bun", "test", "--filter=it's a test"],
+      ["echo", "你好"],
+    ];
+    const updated = await db.updateProject(project.id, {
+      ...project,
+      worktree: false,
+      checks,
+    });
+    expect(updated).toEqual({ ...project, worktree: false, checks });
+    expect(await db.project(project.id)).toEqual(updated);
+    const run = await db.submitRun({
+      issueId: issue.id,
+      workerId,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    expect(run).toMatchObject({
+      runtimeRunId: null,
+      error: null,
+      review: null,
+      artifacts: [],
+      lastSequence: 0,
+      cancelRequested: false,
+    });
+    expect(await db.run(run.id)).toEqual(run);
+    expect(await db.runs(issue.id)).toEqual([run]);
+    const worker = await db.worker(workerId);
+    for (const timestamp of [
+      updated.createdAt,
+      issue.createdAt,
+      issue.updatedAt,
+      run.createdAt,
+      run.updatedAt,
+      worker.lastHeartbeat,
+    ]) {
+      expect(typeof timestamp).toBe("string");
+      if (typeof timestamp !== "string") throw new Error("Expected ISO date");
+      expect(new Date(timestamp).toISOString()).toBe(timestamp);
+    }
+    const [command] = await db.pendingCommands(workerId);
+    expect(command?.type).toBe("run.submit");
+    if (command?.type !== "run.submit") throw new Error("Expected submission");
+    expect(command.payload).toEqual({
+      project: updated,
+      issue,
+      run,
+    });
+    // Check storage too: a second ORM decode can hide double-encoded JSONB.
+    const [stored] = await db.sql`SELECT
+      (SELECT jsonb_typeof(checks) FROM agent_flow.projects WHERE id=${project.id}) AS checks,
+      (SELECT jsonb_typeof(capabilities) FROM agent_flow.workers WHERE id=${workerId}) AS capabilities,
+      (SELECT jsonb_typeof(command) FROM agent_flow.outbox WHERE id=${command.requestId}) AS command`;
+    expect(stored).toEqual({
+      checks: "array",
+      capabilities: "array",
+      command: "object",
+    });
+  });
+  test("issue filters compose and omit deleted records", async () => {
+    const project = await db.createProject({
+      name: "Filters",
+      repoKey: "filters",
+    });
+    const matching = await db.createIssue({
+      projectId: project.id,
+      title: "Needle in title",
+      status: "todo",
+    });
+    const descriptionMatch = await db.createIssue({
+      projectId: project.id,
+      title: "Another task",
+      description: "A NEEDLE in the description",
+      status: "backlog",
+    });
+    const deleted = await db.createIssue({
+      projectId: project.id,
+      title: "Deleted needle",
+    });
+    const otherProject = await db.createProject({
+      name: "Other",
+      repoKey: "other",
+    });
+    await db.createIssue({
+      projectId: otherProject.id,
+      title: "Needle elsewhere",
+    });
+    await db.deleteIssue(deleted.id);
+    expect(
+      (await db.issues({ projectId: project.id, q: "needle" }))
+        .map((item) => item.id)
+        .sort(),
+    ).toEqual([matching.id, descriptionMatch.id].sort());
+    expect(
+      await db.issues({ projectId: project.id, status: "todo", q: "NEEDLE" }),
+    ).toEqual([matching]);
+    expect(await db.issues({ projectId: project.id, q: "missing" })).toEqual(
+      [],
+    );
+    await db.deleteProject(project.id);
+    expect(await db.issues({ projectId: project.id })).toEqual([]);
+    expect((await db.projects()).some((item) => item.id === project.id)).toBe(
+      false,
+    );
+    expect(
+      (await db.projects()).some((item) => item.id === otherProject.id),
+    ).toBe(true);
+  });
+  test("events round trip nested JSON and compare duplicate payloads as JSONB", async () => {
+    const { issue, workerId } = await setup();
+    const run = await db.submitRun({
+      issueId: issue.id,
+      workerId,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const event = {
+      runId: run.id,
+      sequence: 1,
+      type: "log",
+      timestamp: "2026-01-02T03:04:05.678Z",
+      payload: {
+        message: "it's persisted",
+        detail: { values: [1, false, null, { text: "你好" }], empty: [] },
+      },
+    };
+    expect(await db.appendEvent(workerId, event)).toBe(1);
+    expect(
+      await db.appendEvent(workerId, {
+        ...event,
+        payload: {
+          detail: { empty: [], values: [1, false, null, { text: "你好" }] },
+          message: "it's persisted",
+        },
+      }),
+    ).toBe(1);
+    expect(await db.events(run.id)).toEqual({
+      events: [event],
+      nextCursor: 1,
+      hasMore: false,
+    });
+    await expect(
+      db.appendEvent(workerId, {
+        ...event,
+        payload: {
+          ...event.payload,
+          detail: { ...event.payload.detail, empty: [null] },
+        },
+      }),
+    ).rejects.toMatchObject({ code: "event_conflict" });
   });
   test("concurrent submit is idempotent and run + outbox commit atomically", async () => {
     const { issue, workerId } = await setup();

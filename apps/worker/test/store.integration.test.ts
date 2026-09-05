@@ -70,6 +70,25 @@ suite("worker durable PostgreSQL boundary", () => {
     expect(
       (await store.execution(runId)).submission.payload.project.checks,
     ).toEqual([["bun", "test"]]);
+    expect(await store.execution(runId)).toEqual({
+      runId,
+      workerId,
+      submission: command,
+      runtimeRunId: null,
+      status: "queued",
+      cancelReason: null,
+      failReason: null,
+    });
+    const { checks, ...project } = command.payload.project;
+    await store.receive({
+      ...command,
+      payload: {
+        project: { checks, ...project },
+        issue: command.payload.issue,
+        run: command.payload.run,
+      },
+    });
+    expect(await store.commands()).toEqual([command]);
     const other = new WorkerStore(url as string, workerId);
     try {
       expect((await other.execution(runId)).submission).toEqual(command);
@@ -107,6 +126,31 @@ suite("worker durable PostgreSQL boundary", () => {
     expect((await store.events()).map((event) => event.sequence)).toEqual([
       6, 7, 8, 9,
     ]);
+  });
+  test("worker identity scopes reads, event ACKs and execution updates", async () => {
+    const other = new WorkerStore(
+      url as string,
+      `other-${crypto.randomUUID()}`,
+    );
+    const events = await store.events();
+    try {
+      expect(await other.commands()).toEqual([]);
+      expect(await other.events()).toEqual([]);
+      expect(await other.active()).toEqual([]);
+      await expect(other.execution(runId)).rejects.toThrow("Unknown execution");
+      await expect(other.receive(command)).rejects.toThrow("another worker");
+      await expect(
+        other.emit(runId, "foreign", "log", { text: "foreign" }),
+      ).rejects.toThrow("another worker's run");
+      await other.handled(command.requestId);
+      await other.runtime(runId, "foreign-runtime");
+      await other.acknowledge(runId, 100);
+      expect(await store.commandHandled(command.requestId)).toBe(false);
+      expect((await store.execution(runId)).runtimeRunId).toBeNull();
+      expect(await store.events()).toEqual(events);
+    } finally {
+      await other.close();
+    }
   });
   test("external operation intent is atomic and remains uncertain after restart", async () => {
     const intent = {
@@ -207,6 +251,64 @@ suite("worker durable PostgreSQL boundary", () => {
       store.journal.reserve(intent),
     ]);
     expect(retries.filter((result) => result.created)).toHaveLength(1);
+  });
+  test("operation reconciliation preserves JSON null and compares nested results as JSONB", async () => {
+    const operation = {
+      runId,
+      operationId: "json-result",
+      kind: "agent.prompt" as const,
+      intent: { text: "one task", options: { flags: [true, null, "你好"] } },
+    };
+    expect((await store.journal.reserve(operation)).operation.intent).toEqual(
+      operation.intent,
+    );
+    await store.resolveOperation(runId, operation.operationId, {
+      response: { entries: [1, null, { text: "it's done" }], empty: [] },
+      ok: true,
+    });
+    await store.resolveOperation(runId, operation.operationId, {
+      ok: true,
+      response: { empty: [], entries: [1, null, { text: "it's done" }] },
+    });
+    await expect(
+      store.resolveOperation(runId, operation.operationId, {
+        ok: false,
+        response: { empty: [], entries: [1, null, { text: "it's done" }] },
+      }),
+    ).rejects.toThrow("different confirmed result");
+    for (const result of [null, undefined]) {
+      const operationId = `json-${result === null ? "null" : "undefined"}`;
+      await store.journal.reserve({ ...operation, operationId });
+      await store.journal.complete(runId, operationId, result);
+      await store.resolveOperation(runId, operationId, null);
+      const replay = await store.journal.reserve({ ...operation, operationId });
+      expect(replay.created).toBe(false);
+      expect(replay.operation.state).toBe("completed");
+      await expect(
+        store.resolveOperation(runId, operationId, { changed: true }),
+      ).rejects.toThrow("different confirmed result");
+    }
+  });
+  test("operation results preserve strings that look like JSON values", async () => {
+    for (const [index, result] of [
+      "123",
+      "null",
+      "true",
+      '{"ok":true}',
+    ].entries()) {
+      const operation = {
+        runId,
+        operationId: `json-string-${index}`,
+        kind: "agent.prompt" as const,
+        intent: { text: "Return the output as text" },
+      };
+      await store.journal.reserve(operation);
+      await store.journal.complete(runId, operation.operationId, result);
+      const replay = await store.journal.reserve(operation);
+      expect(replay.created).toBe(false);
+      expect(replay.operation.result).toBe(result);
+      await store.resolveOperation(runId, operation.operationId, result);
+    }
   });
   test("losing the lock connection fences the old worker even when another process reacquires", async () => {
     const fencedId = `fence-${crypto.randomUUID()}`;

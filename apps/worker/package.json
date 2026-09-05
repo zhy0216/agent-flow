@@ -14,9 +14,11 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@agent-flow/db": "workspace:*",
     "@agent-flow/contracts": "workspace:*",
     "@agent-flow/herdr": "workspace:*",
     "@agent-flow/workflows": "workspace:*",
-    "@better-trigger/worker": "link:@better-trigger/worker"
+    "@better-trigger/worker": "link:@better-trigger/worker",
+    "drizzle-orm": "0.45.2"
   }
 }

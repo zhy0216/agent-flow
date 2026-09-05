@@ -21,6 +21,8 @@ bun run setup:deps
 
 为 Agent Flow 创建独立 PostgreSQL 数据库，例如 `agent_flow_dev`。API 和 worker 使用同一个 `DATABASE_URL`；业务表在 `agent_flow`，worker 操作记录在 `agent_flow_worker`，better-trigger 内部表在 `public`。runtime 显式固定 search path，数据库用户名为 `agent_flow` 时也不会混用业务表。
 
+业务和 worker 数据访问使用 Drizzle ORM，启动时自动执行各自的版本迁移，已有数据库会保留数据并接入 Drizzle 迁移记录。修改表结构、生成迁移及手动执行的方法见 [数据库开发说明](docs/database.md)。
+
 ```sh
 cp apps/server/.env.example apps/server/.env
 cp apps/worker/.env.example apps/worker/.env
@@ -96,7 +98,7 @@ apps/web           React + Vite + TanStack Router/Query
 apps/server        Zebra API、状态投影、WS 与 SSE
 apps/worker        Bun worker、身份、控制连接与恢复
 packages/contracts 浏览器安全 DTO、输入验证、版本化协议
-packages/db        PostgreSQL 业务 schema 与迁移
+packages/db        Drizzle PostgreSQL 业务 schema、查询与迁移
 packages/herdr     固定 argv、显式目标、归属与 operation journal
 packages/workflows 可注入依赖的版本化 durable workflow
 scripts            固定依赖安装、隔离数据库与端到端验收
