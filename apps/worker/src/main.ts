@@ -1,12 +1,15 @@
 import { readHerdrDiagnostics } from "@agent-flow/herdr";
+import { runtimeDatabaseUrl } from "./runtime-database";
 
 async function main() {
   const command = process.argv[2] ?? "start";
   if (
-    !["start", "check", "smoke"].includes(command) ||
-    process.argv.length > 3
+    !["start", "check", "smoke", "pair"].includes(command) ||
+    (command !== "pair" && process.argv.length > 3)
   ) {
-    throw new Error("Usage: bun src/main.ts [start|check|smoke]");
+    throw new Error(
+      "Usage: bun src/main.ts [start|check|smoke|pair --code CODE]",
+    );
   }
 
   const herdr = await readHerdrDiagnostics();
@@ -33,6 +36,41 @@ async function main() {
     );
   }
 
+  if (command === "start" || command === "pair") {
+    const { readWorkerConfig, loadIdentity, pairWorker } = await import(
+      "./config"
+    );
+    const config = await readWorkerConfig();
+    if (command === "pair") {
+      const code =
+        process.argv[3] === "--code" ? process.argv[4] : process.argv[3];
+      if (!code) throw new Error("Usage: bun src/main.ts pair --code CODE");
+      const identity = await pairWorker(config, code);
+      console.info(
+        `Paired worker ${identity.workerId}. Identity saved to ${config.identityFile}.`,
+      );
+      return;
+    }
+    const { startWorker } = await import("./host");
+    const worker = await startWorker(
+      config,
+      await loadIdentity(config),
+      herdr.context,
+    );
+    console.info(`Agent Flow worker started inside ${herdr.context.paneId}.`);
+    await new Promise<void>((resolve) => {
+      const shutdown = () => {
+        process.off("SIGINT", shutdown);
+        process.off("SIGTERM", shutdown);
+        resolve();
+      };
+      process.once("SIGINT", shutdown);
+      process.once("SIGTERM", shutdown);
+    });
+    await worker.stop();
+    return;
+  }
+
   const [{ createEmbeddedRuntime }, { workflowTasks, workflowSmoke }] =
     await Promise.all([
       import("@better-trigger/worker/embedded"),
@@ -40,7 +78,7 @@ async function main() {
     ]);
 
   const runtime = await createEmbeddedRuntime({
-    databaseUrl,
+    databaseUrl: runtimeDatabaseUrl(databaseUrl),
     tasks: workflowTasks,
     name: `agent-flow:${herdr.context.paneId}`,
     concurrency: 1,

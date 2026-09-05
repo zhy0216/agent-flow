@@ -33,3 +33,5 @@ export const workflowSmoke = task({
 });
 
 export const workflowTasks = [workflowSmoke];
+
+export * from "./issue-agent";

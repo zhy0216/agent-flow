@@ -11,6 +11,8 @@
     "typecheck": "bun run --bun tsc --noEmit"
   },
   "dependencies": {
+    "@agent-flow/contracts": "workspace:*",
+    "@agent-flow/herdr": "workspace:*",
     "better-trigger": "link:better-trigger"
   }
 }

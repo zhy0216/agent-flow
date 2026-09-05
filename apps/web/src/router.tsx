@@ -1,3 +1,4 @@
+import { issueStatuses, priorities, runStatuses } from "@agent-flow/contracts";
 import { type QueryClient, useQuery } from "@tanstack/react-query";
 import {
   createRootRouteWithContext,
@@ -7,11 +8,14 @@ import {
   Outlet,
   type RouterHistory,
 } from "@tanstack/react-router";
-import { healthQueryOptions } from "./api";
+import { healthQueryOptions, type IssueFilters, useRealtime } from "./api";
+import { IssuePage, IssuesPage, ProjectsPage } from "./issues";
+import { RunPage, RunsPage } from "./runs";
+import { WorkersPage } from "./workers";
 
 function Shell() {
   const health = useQuery(healthQueryOptions);
-
+  const realtime = useRealtime();
   return (
     <div className="workspace">
       <aside className="sidebar">
@@ -29,22 +33,34 @@ function Shell() {
           >
             <span className="nav-icon" aria-hidden="true">
               ◫
-            </span>{" "}
+            </span>
             任务
+          </Link>
+          <Link to="/projects" activeProps={{ className: "active" }}>
+            <span className="nav-icon" aria-hidden="true">
+              ◇
+            </span>
+            项目
           </Link>
           <Link to="/runs" activeProps={{ className: "active" }}>
             <span className="nav-icon" aria-hidden="true">
               ▷
-            </span>{" "}
+            </span>
             执行记录
           </Link>
           <Link to="/workers" activeProps={{ className: "active" }}>
             <span className="nav-icon" aria-hidden="true">
               ▤
-            </span>{" "}
+            </span>
             Workers
           </Link>
         </nav>
+        <div className="sidebar-note">
+          <span className="note-line" />
+          从想法到交付，
+          <br />
+          让每一步都有迹可循。
+        </div>
         <div className="sidebar-footer">
           <div className="connection" role="status">
             <span
@@ -65,7 +81,17 @@ function Shell() {
               重新连接
             </button>
           )}
-          <span className="version">Agent Flow · 开发预览</span>
+          <div
+            className={`stream-status ${realtime === "connected" ? "" : "muted"}`}
+            role="status"
+          >
+            {realtime === "connected"
+              ? "↻ 实时同步已连接"
+              : realtime === "connecting"
+                ? "正在连接实时更新…"
+                : "实时连接中断 · 正在重连"}
+          </div>
+          <span className="version">Agent Flow · 本地工作空间</span>
         </div>
       </aside>
       <main className="main">
@@ -74,110 +100,123 @@ function Shell() {
     </div>
   );
 }
-
-function EmptyPage({
-  title,
-  eyebrow,
-  symbol,
-  heading,
-  description,
-}: {
-  title: string;
-  eyebrow: string;
-  symbol: string;
-  heading: string;
-  description: string;
-}) {
-  return (
-    <>
-      <header className="page-header">
-        <span>工作空间</span>
-        <span className="separator">/</span>
-        <h1>{title}</h1>
-      </header>
-      <section className="page-content">
-        <div className="section-heading">
-          <h2>{title}</h2>
-          <span className="count">0</span>
-        </div>
-        <p className="section-description">{eyebrow}</p>
-        <div className="empty-state">
-          <div className="empty-icon" aria-hidden="true">
-            {symbol}
-          </div>
-          <h3>{heading}</h3>
-          <p>{description}</p>
-          <span className="preview-badge">功能筹备中</span>
-        </div>
-      </section>
-    </>
-  );
-}
-
 const rootRoute = createRootRouteWithContext<{ queryClient: QueryClient }>()({
   component: Shell,
   notFoundComponent: () => (
     <div className="not-found">
       <h1>页面不存在</h1>
-      <Link to="/">返回任务</Link>
+      <Link className="button" to="/">
+        返回任务
+      </Link>
     </div>
   ),
 });
-
+export function validateIssueSearch(
+  search: Record<string, unknown>,
+): IssueFilters {
+  return {
+    projectId:
+      typeof search.projectId === "string" && search.projectId
+        ? search.projectId
+        : undefined,
+    q:
+      typeof search.q === "string" && search.q
+        ? search.q.slice(0, 500)
+        : undefined,
+    status:
+      typeof search.status === "string" &&
+      issueStatuses.some((value) => value === search.status)
+        ? search.status
+        : undefined,
+    priority:
+      typeof search.priority === "string" &&
+      priorities.some((value) => value === search.priority)
+        ? search.priority
+        : undefined,
+  };
+}
 const issuesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  component: () => (
-    <EmptyPage
-      title="任务"
-      eyebrow="在这里组织想法、安排任务，并跟进每一次交付。"
-      symbol="◫"
-      heading="下一件事，从这里开始"
-      description="项目和任务功能将在下一阶段接入。这里将汇集你的待办、进行中的工作和完成的交付。"
-    />
-  ),
+  validateSearch: validateIssueSearch,
+  component: function IssuesRoute() {
+    const filters = issuesRoute.useSearch();
+    const navigate = issuesRoute.useNavigate();
+    return (
+      <IssuesPage
+        filters={filters}
+        setFilters={(search) => void navigate({ search, replace: true })}
+      />
+    );
+  },
 });
-
+const projectsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/projects",
+  component: ProjectsPage,
+});
+const issueDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/issues/$issueId",
+  component: function IssueRoute() {
+    const { issueId } = issueDetailRoute.useParams();
+    return <IssuePage key={issueId} id={issueId} />;
+  },
+});
 const runsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/runs",
-  component: () => (
-    <EmptyPage
-      title="执行记录"
-      eyebrow="每个任务的进展、输出与结果，都有迹可循。"
-      symbol="▷"
-      heading="还没有执行记录"
-      description="任务执行接入后，你可以在这里查看运行进度、处理等待中的操作，以及检查执行结果。"
-    />
-  ),
+  validateSearch: (search: Record<string, unknown>): { status?: string } => ({
+    status:
+      typeof search.status === "string" &&
+      runStatuses.some((status) => status === search.status)
+        ? search.status
+        : undefined,
+  }),
+  component: function RunsRoute() {
+    const { status } = runsRoute.useSearch();
+    const navigate = runsRoute.useNavigate();
+    return (
+      <RunsPage
+        status={status}
+        setStatus={(value) =>
+          void navigate({ search: { status: value }, replace: true })
+        }
+      />
+    );
+  },
 });
-
+const runDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/runs/$runId",
+  component: function RunRoute() {
+    const { runId } = runDetailRoute.useParams();
+    return <RunPage key={runId} id={runId} />;
+  },
+});
 const workersRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/workers",
-  component: () => (
-    <EmptyPage
-      title="Workers"
-      eyebrow="连接执行环境，让任务在你的工作空间里运行。"
-      symbol="▤"
-      heading="执行环境即将接入"
-      description="Worker 注册功能尚未接入。后续会在这里显示 Herdr 执行环境的连接状态、容量和当前任务。"
-    />
-  ),
+  component: WorkersPage,
 });
-
 export function createAppRouter(
   queryClient: QueryClient,
   history?: RouterHistory,
 ) {
   return createRouter({
-    routeTree: rootRoute.addChildren([issuesRoute, runsRoute, workersRoute]),
+    routeTree: rootRoute.addChildren([
+      issuesRoute,
+      projectsRoute,
+      issueDetailRoute,
+      runsRoute,
+      runDetailRoute,
+      workersRoute,
+    ]),
     context: { queryClient },
     defaultPreload: "intent",
     history,
   });
 }
-
 declare module "@tanstack/react-router" {
   interface Register {
     router: ReturnType<typeof createAppRouter>;

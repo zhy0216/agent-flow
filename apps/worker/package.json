@@ -7,11 +7,14 @@
     "dev": "bun --watch src/main.ts start",
     "start": "bun src/main.ts start",
     "check": "bun src/main.ts check",
+    "pair": "bun src/main.ts pair",
     "smoke": "bun src/main.ts smoke",
     "build": "bun build src/main.ts --target bun --packages external --outdir dist",
-    "typecheck": "bun run --bun tsc --noEmit"
+    "typecheck": "bun run --bun tsc --noEmit && bun run --bun tsc --noEmit --project test/tsconfig.json",
+    "test": "bun test"
   },
   "dependencies": {
+    "@agent-flow/contracts": "workspace:*",
     "@agent-flow/herdr": "workspace:*",
     "@agent-flow/workflows": "workspace:*",
     "@better-trigger/worker": "link:@better-trigger/worker"

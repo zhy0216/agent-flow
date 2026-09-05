@@ -92,3 +92,5 @@ function spawnVersion() {
     stderr: "pipe",
   });
 }
+
+export * from "./adapter";

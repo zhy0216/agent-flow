@@ -1,2 +1,2 @@
 [install]
-registry = "https://registry.npmjs.org"
+globalDir = "./.local-deps/bun-global"

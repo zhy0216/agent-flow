@@ -1,0 +1,16 @@
+{
+  "name": "@agent-flow/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "bun run --bun tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@agent-flow/contracts": "workspace:*"
+  }
+}

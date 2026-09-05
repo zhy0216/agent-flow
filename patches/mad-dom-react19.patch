@@ -1,0 +1,509 @@
+diff --git a/bun.lock b/bun.lock
+index c69f61a..ad76416 100644
+--- a/bun.lock
++++ b/bun.lock
+@@ -8,6 +8,8 @@
+         "@testing-library/dom": "10.4.1",
+         "express": "^4.20.0",
+         "happy-dom": "20.11.11",
++        "react": "19.2.8",
++        "react-dom": "19.2.8",
+         "typescript": "5.9.3",
+         "vitepress": "^1.6.4",
+       },
+@@ -455,6 +457,10 @@
+ 
+     "raw-body": ["raw-body@2.5.3", "https://registry.npmmirror.com/raw-body/-/raw-body-2.5.3.tgz", { "dependencies": { "bytes": "~3.1.2", "http-errors": "~2.0.1", "iconv-lite": "~0.4.24", "unpipe": "~1.0.0" } }, "sha512-s4VSOf6yN0rvbRZGxs8Om5CWj6seneMwK3oDb4lWDH0UPhWcxwOWw5+qk24bxq87szX1ydrwylIOp2uG1ojUpA=="],
+ 
++    "react": ["react@19.2.8", "https://registry.npmmirror.com/react/-/react-19.2.8.tgz", {}, "sha512-PWaYA1L/q9u2u7xYQi+Y3L3Yfnie7XyLeaJICV1MGD6LprsBxcAqGjYyr0eY3p+QdsA+x/Irkt4Qif8D63+Sbw=="],
++
++    "react-dom": ["react-dom@19.2.8", "https://registry.npmmirror.com/react-dom/-/react-dom-19.2.8.tgz", { "dependencies": { "scheduler": "^0.27.0" }, "peerDependencies": { "react": "^19.2.8" } }, "sha512-rVprimfGBG3DR+Tq0IQG2DT5PxKth1WIGDmj5yPmlzr4YBe7uyE+Du4oVqTDXZSHGGGXRtTJEGSSePyQCMBglQ=="],
++
+     "react-is": ["react-is@17.0.2", "https://registry.npmmirror.com/react-is/-/react-is-17.0.2.tgz", {}, "sha512-w2GsyukL62IJnlaff/nRegPQR94C/XXamvMWmSHRJ4y7Ts/4ocGRmTHvOs8PSE6pB3dWOrD/nueuU5sduBsQ4w=="],
+ 
+     "regex": ["regex@6.1.0", "https://registry.npmmirror.com/regex/-/regex-6.1.0.tgz", { "dependencies": { "regex-utilities": "^2.3.0" } }, "sha512-6VwtthbV4o/7+OaAF9I5L5V3llLEsoPyq9P1JVXkedTP33c7MfCG0/5NOPcSJn0TzXcG9YUrR0gQSWioew3LDg=="],
+@@ -471,6 +477,8 @@
+ 
+     "safer-buffer": ["safer-buffer@2.1.2", "https://registry.npmmirror.com/safer-buffer/-/safer-buffer-2.1.2.tgz", {}, "sha512-YZo3K82SD7Riyi0E1EQPojLz7kpepnSQI9IyPbHHg1XXXevb5dJI7tpyN2ADxGcQbHG7vcyRHk0cbwqcQriUtg=="],
+ 
++    "scheduler": ["scheduler@0.27.0", "https://registry.npmmirror.com/scheduler/-/scheduler-0.27.0.tgz", {}, "sha512-eNv+WrVbKu1f3vbYJT/xtiF5syA5HPIMtf9IgY/nKg0sWqzAUEvqY/xm7OcZc/qafLx/iO9FgOmeSAp4v5ti/Q=="],
++
+     "search-insights": ["search-insights@2.17.3", "https://registry.npmmirror.com/search-insights/-/search-insights-2.17.3.tgz", {}, "sha512-RQPdCYTa8A68uM2jwxoY842xDhvx3E5LFL1LxvxCNMev4o5mLuokczhzjAgGwUZBAmOKZknArSxLKmXtIi2AxQ=="],
+ 
+     "send": ["send@0.19.2", "https://registry.npmmirror.com/send/-/send-0.19.2.tgz", { "dependencies": { "debug": "2.6.9", "depd": "2.0.0", "destroy": "1.2.0", "encodeurl": "~2.0.0", "escape-html": "~1.0.3", "etag": "~1.8.1", "fresh": "~0.5.2", "http-errors": "~2.0.1", "mime": "1.6.0", "ms": "2.1.3", "on-finished": "~2.4.1", "range-parser": "~1.2.1", "statuses": "~2.0.2" } }, "sha512-VMbMxbDeehAxpOtWJXlcUS5E8iXh6QmN+BkRX1GARS3wRaXEEgzCcB10gTQazO42tpNIya8xIyNx8fll1OFPrg=="],
+diff --git a/index.d.ts b/index.d.ts
+index 00957b5..8a36f39 100644
+--- a/index.d.ts
++++ b/index.d.ts
+@@ -81,6 +81,7 @@ export interface DetachedWindowAPI {
+ }
+ 
+ export declare class Window {
++  oninput: ((this: Window, event: Event) => void) | null;
+   constructor(options?: IWindowOptions);
+   /** The live Document facade of this window (T20 wrapper identity). */
+   readonly document: Document;
+@@ -159,6 +160,8 @@ export declare class Window {
+   readonly HTMLLabelElement: typeof HTMLLabelElement;
+   /** The WHATWG `HTMLImageElement` constructor (T48A). */
+   readonly HTMLImageElement: typeof HTMLImageElement;
++  /** The constructor used by iframe elements, including for instanceof checks. */
++  readonly HTMLIFrameElement: typeof HTMLIFrameElement;
+   /** The WHATWG `HTMLScriptElement` constructor (T48A). */
+   readonly HTMLScriptElement: typeof HTMLScriptElement;
+   /** The WHATWG `HTMLStyleElement` constructor (T48A). */
+@@ -640,6 +643,7 @@ export declare class ErrorEvent {
+ }
+ 
+ export declare class Document {
++  oninput: ((this: Document, event: Event) => void) | null;
+   readonly currentScript: HTMLScriptElement | null;
+   open(): Document;
+   constructor(nativeHandle: DocumentHandle);
+@@ -1346,6 +1350,7 @@ export interface ShadowRootInit {
+  * `contentEditable`) plus `dataset` and the `click`/`focus`/`blur`
+  * interaction live here, two-way synced with the element's attribute storage. */
+ export interface HTMLElement extends Element {
++  oninput: ((this: HTMLElement, event: Event) => void) | null;
+   /** WHATWG `HTMLElement.title`: the `title` attribute (`""` when absent). */
+   title: string;
+   /** WHATWG `HTMLElement.dir`: the `dir` attribute (`""` when absent). */
+@@ -1566,6 +1571,8 @@ declare const HTMLHRElement: { readonly prototype: HTMLHRElement; new (): HTMLHR
+ declare const HTMLLabelElement: { readonly prototype: HTMLLabelElement; new (): HTMLLabelElement };
+ /** The WHATWG `HTMLImageElement` constructor (T48A). */
+ declare const HTMLImageElement: { readonly prototype: HTMLImageElement; new (): HTMLImageElement };
++/** The HTMLIFrameElement constructor exposed on Window. */
++declare const HTMLIFrameElement: { readonly prototype: HTMLIFrameElement; new (): HTMLIFrameElement };
+ /** The WHATWG `HTMLScriptElement` constructor (T48A). */
+ declare const HTMLScriptElement: { readonly prototype: HTMLScriptElement; new (): HTMLScriptElement };
+ /** The WHATWG `HTMLStyleElement` constructor (T48A). */
+@@ -1617,6 +1624,18 @@ export interface HTMLLabelElement extends HTMLElement {
+   readonly form: HTMLFormElement | null;
+ }
+ export interface HTMLImageElement extends HTMLElement {}
++/** The implemented iframe attribute surface. */
++export interface HTMLIFrameElement extends HTMLElement {
++  allow: string;
++  height: string;
++  width: string;
++  name: string;
++  referrerPolicy: string;
++  src: string;
++  srcdoc: string;
++  get sandbox(): DOMTokenList;
++  set sandbox(value: string);
++}
+ export interface HTMLScriptElement extends HTMLElement {}
+ export interface HTMLStyleElement extends HTMLElement {}
+ export interface HTMLLinkElement extends HTMLElement {}
+diff --git a/js/facade/extensions/hdunit-nodes.js b/js/facade/extensions/hdunit-nodes.js
+index 9a9c3df..ff76817 100644
+--- a/js/facade/extensions/hdunit-nodes.js
++++ b/js/facade/extensions/hdunit-nodes.js
+@@ -244,8 +244,9 @@ function eventHandlerGetter(ctx, element, eventName) {
+   const handlers = handlersOf(element);
+   const stored = handlers.get(eventName);
+   if (stored !== undefined) return stored;
+-  const handle = handleOf(element);
+-  const code = handle.getAttribute(`on${eventName}`);
++  // Document and Window expose event-handler properties without attributes.
++  const handle = element instanceof Element ? handleOf(element) : null;
++  const code = handle?.getAttribute(`on${eventName}`) ?? null;
+   if (code === null || code === "") return null;
+   const win = windowOf(ctx, element);
+   if (win === undefined) return null;
+@@ -265,8 +266,9 @@ function eventHandlerGetter(ctx, element, eventName) {
+ }
+ 
+ function eventHandlerSetter(ctx, element, eventName, value) {
+-  const handle = handleOf(element);
+-  handle.removeAttribute(`on${eventName}`);
++  if (element instanceof Element) {
++    handleOf(element).removeAttribute(`on${eventName}`);
++  }
+   const handlers = handlersOf(element);
+   const previous = handlers.get(eventName);
+   if (previous !== undefined) {
+@@ -413,6 +415,12 @@ export function install(ctx) {
+     registerElementClass(tag, elementClass);
+   }
+ 
++  // React checks the active element against this constructor during commits.
++  // Expose the same class used by createElement / parse / clone / import.
++  ctx.defineAccessor(Window.prototype, "HTMLIFrameElement", function getHTMLIFrameElement() {
++    return HTMLIFrameElement;
++  }, undefined);
++
+   // `window.Text` / `window.Comment` / `window.CharacterData` — per-window
+   // subclasses that mint a detached node through the window's document, like
+   // happy-dom's WindowContextClassExtender. `new window.Text('x')` creates a
+@@ -1727,6 +1735,17 @@ export function install(ctx) {
+     details.dispatchEvent(new Event("toggle"));
+   });
+ 
++  // React detects modern input events through `"oninput" in document`.
++  // Use real handler accessors so assignment, replacement and removal also
++  // participate in normal event dispatch on each supported target.
++  for (const Class of [Window, Document, HTMLElement]) {
++    ctx.defineAccessor(Class.prototype, "oninput", function oninput() {
++      return eventHandlerGetter(ctx, this, "input");
++    }, function oninput(value) {
++      eventHandlerSetter(ctx, this, "input", value);
++    });
++  }
++
+   // HTMLBodyElement + window: global event-handler attribute accessors.
+   for (const eventName of GLOBAL_EVENT_NAMES) {
+     const property = `on${eventName}`;
+diff --git a/js/facade/extensions/html-element.js b/js/facade/extensions/html-element.js
+index 0c50426..fd93727 100644
+--- a/js/facade/extensions/html-element.js
++++ b/js/facade/extensions/html-element.js
+@@ -176,7 +176,15 @@ const PER_TAG = [
+   ["q", HTMLQuoteElement],
+   ["slot", HTMLSlotElement],
+   ["template", HTMLTemplateElement],
+-  ["section", HTMLElement],
++  // These standard tags use HTMLElement itself, not HTMLUnknownElement.
++  // https://html.spec.whatwg.org/multipage/indices.html#element-interfaces
++  ...[
++    "abbr", "address", "article", "aside", "b", "bdi", "bdo", "cite", "code",
++    "dd", "dfn", "dt", "em", "figcaption", "figure", "footer", "header",
++    "hgroup", "i", "kbd", "main", "mark", "nav", "noscript", "rp", "rt",
++    "ruby", "s", "samp", "search", "section", "small", "strong", "sub",
++    "summary", "sup", "u", "var", "wbr",
++  ].map((tag) => [tag, HTMLElement]),
+ ];
+ 
+ const PER_TAG_WINDOW_ACCESSORS = Object.freeze({
+diff --git a/package.json b/package.json
+index e07ddaf..aaad29f 100644
+--- a/package.json
++++ b/package.json
+@@ -91,6 +91,8 @@
+     "@testing-library/dom": "10.4.1",
+     "express": "^4.20.0",
+     "happy-dom": "20.11.11",
++    "react": "19.2.8",
++    "react-dom": "19.2.8",
+     "typescript": "5.9.3",
+     "vitepress": "^1.6.4"
+   }
+diff --git a/tests/bun/hdunit-nodes-wave.test.js b/tests/bun/hdunit-nodes-wave.test.js
+index a670d05..567f084 100644
+--- a/tests/bun/hdunit-nodes-wave.test.js
++++ b/tests/bun/hdunit-nodes-wave.test.js
+@@ -249,6 +249,44 @@ describe("T06 reflected attributes", () => {
+ });
+ 
+ describe("T06 event-handler attributes", () => {
++  test("oninput handlers default to null, can be replaced and removed, and are target-local", () => {
++    const window = freshWindow();
++    const { document } = window;
++    const input = document.createElement("input");
++    const other = document.createElement("input");
++    for (const target of [window, document, input]) {
++      expect("oninput" in target).toBe(true);
++      expect(target.oninput).toBeNull();
++      const calls = [];
++      const first = function (event) { calls.push(["first", this, event]); };
++      const second = function (event) { calls.push(["second", this, event]); };
++      const event = new window.Event("input");
++      target.oninput = first;
++      expect(target.oninput).toBe(first);
++      target.dispatchEvent(event);
++      target.oninput = second;
++      expect(target.oninput).toBe(second);
++      target.dispatchEvent(event);
++      target.oninput = null;
++      expect(target.oninput).toBeNull();
++      target.dispatchEvent(event);
++      expect(calls).toEqual([["first", target, event], ["second", target, event]]);
++      expect(other.oninput).toBeNull();
++    }
++  });
++
++  test("input events bubble from an element handler to the document handler", () => {
++    const window = freshWindow();
++    const { document } = window;
++    const input = document.createElement("input");
++    document.body.appendChild(input);
++    const calls = [];
++    input.oninput = (event) => calls.push(["input", event.target, event.currentTarget]);
++    document.oninput = (event) => calls.push(["document", event.target, event.currentTarget]);
++    input.dispatchEvent(new window.Event("input", { bubbles: true }));
++    expect(calls).toEqual([["input", input, input], ["document", input, document]]);
++  });
++
+   test("on* getter compiles the attribute in the window scope", () => {
+     const window = freshWindow({
+       settings: { enableJavaScriptEvaluation: true, suppressCodeGenerationFromStringsWarning: true },
+diff --git a/tests/compat/types/fixtures/positive/window-document-basics.ts b/tests/compat/types/fixtures/positive/window-document-basics.ts
+index 93a39ae..4490c81 100644
+--- a/tests/compat/types/fixtures/positive/window-document-basics.ts
++++ b/tests/compat/types/fixtures/positive/window-document-basics.ts
+@@ -27,7 +27,29 @@ if (label instanceof window.HTMLLabelElement) {
+   void [control, form];
+ }
+ void [defaultView, elementNode, documentNode, classAttribute];
++const iframe = document.createElement("iframe");
++const iframePrototype: import("dom-under-test").HTMLIFrameElement = window.HTMLIFrameElement.prototype;
++if (iframe instanceof window.HTMLIFrameElement) {
++  const typedIframe: import("dom-under-test").HTMLIFrameElement = iframe;
++  iframe.src = "/preview";
++  iframe.srcdoc = "<main>Preview</main>";
++  iframe.name = "preview";
++  iframe.allow = "fullscreen";
++  iframe.height = "300";
++  iframe.width = "400";
++  iframe.referrerPolicy = "no-referrer";
++  iframe.sandbox = "allow-scripts";
++  iframe.sandbox.add("allow-forms");
++  const source: string = iframe.src;
++  const tokens: string = iframe.sandbox.value;
++  void [typedIframe, source, tokens];
++}
++void iframePrototype;
+ const input = document.createElement("input");
++window.oninput = function (event) { void [this.document, event.type]; };
++document.oninput = function (event) { void [this.activeElement, event.target]; };
++input.oninput = function (event) { void [this.id, event.bubbles]; };
++window.oninput = document.oninput = input.oninput = null;
+ if (input instanceof window.HTMLInputElement) {
+   const labels = input.labels;
+   const firstLabel = labels?.item(0);
+diff --git a/tests/bun/fixtures/react19.mjs b/tests/bun/fixtures/react19.mjs
+new file mode 100644
+index 0000000..0e2ab74
+--- /dev/null
++++ b/tests/bun/fixtures/react19.mjs
+@@ -0,0 +1,108 @@
++import assert from "node:assert/strict";
++import { Window } from "../../../index.js";
++
++const window = new Window({ url: "http://localhost:5173/" });
++const { document } = window;
++for (const [name, value] of Object.entries({
++  window,
++  document,
++  navigator: window.navigator,
++  HTMLElement: window.HTMLElement,
++  Element: window.Element,
++  Node: window.Node,
++  Event: window.Event,
++  MouseEvent: window.MouseEvent,
++  MutationObserver: window.MutationObserver,
++  IS_REACT_ACT_ENVIRONMENT: true,
++})) {
++  Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
++}
++
++// Import after installing the DOM, as consumers do in their test preload.
++const { act, createElement: h, useState, version } = await import("react");
++const { createRoot } = await import("react-dom/client");
++assert.match(version, /^19\./);
++const diagnostics = [];
++const originalError = console.error;
++console.error = (...args) => diagnostics.push(args.map(String).join(" "));
++const container = document.createElement("div");
++document.body.appendChild(container);
++const root = createRoot(container);
++
++function App() {
++  const [page, setPage] = useState("Home");
++  const [name, setName] = useState("");
++  const [saved, setSaved] = useState("");
++  return h("div", null,
++    h("header", null, h("nav", null,
++      h("a", {
++        href: "/settings",
++        onClick(event) {
++          event.preventDefault();
++          setPage("Settings");
++        },
++      }, "Settings"))),
++    h("aside", null, "Agent Flow"),
++    h("main", null, h("section", null,
++      h("h1", null, page),
++      h("form", {
++        onSubmit(event) {
++          event.preventDefault();
++          setSaved(name);
++        },
++      },
++      h("label", { htmlFor: "agent-name" }, "Agent name"),
++      h("input", {
++        id: "agent-name",
++        name: "agentName",
++        value: name,
++        onChange: (event) => setName(event.target.value),
++      }),
++      h("p", { id: "draft" }, name),
++      h("button", { type: "submit" }, "Save")),
++      h("p", { role: "status" }, saved))),
++    h("footer", null, "Ready"));
++}
++
++try {
++  await act(() => root.render(h(App)));
++  assert.equal(container.querySelector("h1").textContent, "Home");
++  for (const tag of ["nav", "aside", "header", "main", "section", "footer"]) {
++    const element = container.querySelector(tag);
++    assert.equal(element.constructor, window.HTMLElement);
++    assert.equal(element instanceof window.HTMLUnknownElement, false);
++  }
++
++  await act(() => container.querySelector("nav a").click());
++  assert.equal(container.querySelector("h1").textContent, "Settings");
++
++  const input = container.querySelector("input");
++  input.focus();
++  assert.equal(document.activeElement, input);
++  // Simulate a user edit through the DOM setter, bypassing React's own value
++  // tracker so the bubbling input event must reach React's onChange handler.
++  let prototype = Object.getPrototypeOf(input);
++  while (!Object.hasOwn(prototype, "value")) prototype = Object.getPrototypeOf(prototype);
++  const setValue = Object.getOwnPropertyDescriptor(prototype, "value").set;
++  await act(() => {
++    setValue.call(input, "Navigation agent");
++    input.dispatchEvent(new window.Event("input", { bubbles: true }));
++  });
++  assert.equal(container.querySelector("#draft").textContent, "Navigation agent");
++  assert.equal(input.value, "Navigation agent");
++  assert.equal(document.activeElement, input);
++
++  await act(() => container.querySelector("button").click());
++  assert.equal(container.querySelector('[role="status"]').textContent, "Navigation agent");
++  assert.deepEqual(diagnostics, []);
++} finally {
++  try {
++    await act(() => root.unmount());
++    assert.equal(container.childNodes.length, 0);
++    await window.happyDOM.close();
++  } finally {
++    console.error = originalError;
++    window.destroy();
++  }
++}
++console.log("React 19 navigation and form interactions passed");
+diff --git a/tests/bun/html-element-constructors.test.js b/tests/bun/html-element-constructors.test.js
+new file mode 100644
+index 0000000..b59f26a
+--- /dev/null
++++ b/tests/bun/html-element-constructors.test.js
+@@ -0,0 +1,93 @@
++import { afterEach, describe, expect, test } from "bun:test";
++import { Window } from "../../index.js";
++
++const windows = [];
++function createWindow() {
++  const window = new Window({ url: "https://mad-dom.test/" });
++  windows.push(window);
++  return window;
++}
++
++afterEach(() => {
++  for (const window of windows.splice(0)) window.destroy();
++});
++
++describe("HTML element constructor selection", () => {
++  test("Window exposes the actual iframe class for created, parsed, cloned and imported nodes", () => {
++    const window = createWindow();
++    const other = createWindow();
++    const { document } = window;
++    const constructor = window.HTMLIFrameElement;
++    expect(typeof constructor).toBe("function");
++    expect(constructor.name).toBe("HTMLIFrameElement");
++    expect(document.defaultView.HTMLIFrameElement).toBe(constructor);
++
++    const container = document.createElement("div");
++    container.innerHTML = '<iframe src="/embedded" name="preview"></iframe>';
++    const parsed = container.firstElementChild;
++    for (const iframe of [
++      document.createElement("iframe"),
++      document.createElement("IFRAME"),
++      document.createElementNS("http://www.w3.org/1999/xhtml", "iframe"),
++      parsed,
++      parsed.cloneNode(true),
++      document.importNode(other.document.createElement("iframe"), true),
++    ]) {
++      expect(iframe.constructor).toBe(constructor);
++      expect(Object.getPrototypeOf(iframe)).toBe(constructor.prototype);
++      expect(iframe).toBeInstanceOf(constructor);
++      expect(iframe).toBeInstanceOf(window.HTMLElement);
++      expect(iframe).not.toBeInstanceOf(window.HTMLUnknownElement);
++      expect(Object.prototype.toString.call(iframe)).toBe("[object HTMLIFrameElement]");
++    }
++    expect(parsed.src).toBe("https://mad-dom.test/embedded");
++    parsed.name = "updated";
++    expect(parsed.getAttribute("name")).toBe("updated");
++    parsed.sandbox.add("allow-scripts");
++    expect(parsed.getAttribute("sandbox")).toBe("allow-scripts");
++    expect(document.createElement("div")).not.toBeInstanceOf(constructor);
++    expect(document.activeElement).not.toBeInstanceOf(constructor);
++  });
++
++  // Standard elements whose DOM interface is HTMLElement itself.
++  test.each([
++    "abbr", "address", "article", "aside", "b", "bdi", "bdo", "cite", "code",
++    "dd", "dfn", "dt", "em", "figcaption", "figure", "footer", "header",
++    "hgroup", "i", "kbd", "main", "mark", "nav", "noscript", "rp", "rt",
++    "ruby", "s", "samp", "search", "section", "small", "strong", "sub",
++    "summary", "sup", "u", "var", "wbr",
++  ])("%s uses HTMLElement across creation, parsing, cloning and import", (tag) => {
++    const window = createWindow();
++    const other = createWindow();
++    const { document } = window;
++    const container = document.createElement("div");
++    container.innerHTML = tag === "wbr" ? "<wbr>" : `<${tag}></${tag}>`;
++    const parsed = container.firstElementChild;
++    for (const element of [
++      document.createElement(tag),
++      document.createElement(tag.toUpperCase()),
++      document.createElementNS("http://www.w3.org/1999/xhtml", tag),
++      parsed,
++      parsed.cloneNode(true),
++      document.importNode(other.document.createElement(tag), true),
++    ]) {
++      expect(element.localName).toBe(tag);
++      expect(element.constructor).toBe(window.HTMLElement);
++      expect(Object.getPrototypeOf(element)).toBe(window.HTMLElement.prototype);
++      expect(element).not.toBeInstanceOf(window.HTMLUnknownElement);
++      expect(Object.prototype.toString.call(element)).toBe("[object HTMLElement]");
++    }
++  });
++
++  test("unknown names, custom elements and non-HTML namespaces keep their classes", () => {
++    const window = createWindow();
++    const { document } = window;
++    expect(document.createElement("madeuptag").constructor).toBe(window.HTMLUnknownElement);
++    expect(document.createElement("my-widget").constructor).toBe(window.HTMLElement);
++    expect(document.createElement("div").constructor).toBe(window.HTMLDivElement);
++    for (const tag of ["nav", "iframe"]) {
++      expect(document.createElementNS(null, tag).constructor).toBe(window.Element);
++      expect(document.createElementNS("http://www.w3.org/2000/svg", tag).constructor).toBe(window.SVGElement);
++    }
++  });
++});
+diff --git a/tests/bun/react19.test.js b/tests/bun/react19.test.js
+new file mode 100644
+index 0000000..27ae224
+--- /dev/null
++++ b/tests/bun/react19.test.js
+@@ -0,0 +1,16 @@
++import { expect, test } from "bun:test";
++
++test("React 19 mounts navigation and handles controlled form input without DOM patches", () => {
++  // React caches DOM capability detection at import time. A separate process
++  // gives it a fresh Window without leaking globals into other Bun tests.
++  const fixture = new URL("./fixtures/react19.mjs", import.meta.url).pathname;
++  const result = Bun.spawnSync([process.execPath, fixture], {
++    env: { ...process.env, NODE_ENV: "development" },
++    stdout: "pipe",
++    stderr: "pipe",
++    timeout: 10000,
++  });
++  expect(result.stderr.toString()).toBe("");
++  expect(result.exitCode).toBe(0);
++  expect(result.stdout.toString().trim()).toBe("React 19 navigation and form interactions passed");
++}, 15000);

@@ -1,105 +1,107 @@
 # Agent Flow
 
-一个面向 coding agent 的任务工作空间：Web 提供类似 Linear 的项目、任务和执行视图，worker 在 Herdr 内运行并控制执行环境。
+面向本地 coding agent 的任务工作空间。通过 Web 创建项目与任务，选择 Herdr worker，查看实时执行、处理阻塞，再审核检查结果与改动。
 
-当前是**项目初始化**：Web 页面框架、Zebra 健康接口、Herdr 诊断、better-trigger embedded runtime 入口和 smoke workflow 已建立。任务 CRUD、worker 注册、Web 发起执行和实时日志尚未实现，见 [实施方案](plans/agent-flow-foundation/plan.md)。
+首版支持单用户、本地 worker、并发 1。执行通过检查后进入待审核，只有审核通过才将任务标记完成。连接断开不会把运行判定为成功或失败。
 
-## 技术栈
+## 准备
 
-| 层 | 使用的技术 |
-| --- | --- |
-| 工具链 | Bun 1.4.0、Turborepo、TypeScript、Biome |
-| Web | React 19、Vite、TanStack Router + Query |
-| Web API | Zebra 1.0.0 (`@zebra-web/zebra`) |
-| Workflow controller | better-trigger embedded runtime，PostgreSQL 持久化 |
-| 执行环境 | Bun worker + Herdr CLI |
-| DOM 测试 | Bun test + mad-dom |
-
-这里的 worker 是在 Herdr pane 内运行的本地 Bun 进程。
-
-## 本地准备
-
-需要 Bun 1.4.0，以及已安装依赖、已构建的相邻源码仓库：
-
-```text
-workspace/
-├── agent-flow/
-├── better-trigger/  # bun install --frozen-lockfile && bun run build
-└── mad-dom/         # bun install --frozen-lockfile && bun run dev:build
-```
-
-better-trigger 暂未发布 npm 包；mad-dom 当前发布的 JS 包与原生包版本不齐。本轮使用它们的本地构建产物，通过 Bun 注册名称链接，不复制源码。mad-dom 的本地原生构建需要其仓库声明的 Rust 工具链。Zebra 使用 registry 的 1.0.0 发布版本，API 用法参考本机 `../zebra` 源码。
-
-在本仓库执行：
+需要 Bun 1.4.0、Git、PostgreSQL 15+，以及运行 worker 时所需的 Herdr、已配置的 Codex CLI。首次构建依赖还需要 Node 22.22.3、Rustup 与本机 C/C++ 编译工具链。
 
 ```sh
-bun run setup:local
-bun install --frozen-lockfile
+rustup toolchain install 1.93.1 --profile minimal
+bun run setup:deps
+```
+
+`setup:deps` 从 HTTPS 获取固定 Git 版本，验证 mad-dom 补丁哈希，构建 better-trigger 和原生 DOM 模块，并执行冻结锁文件安装。无需相邻源码仓库、绝对路径或全局 Bun 链接。版本与更新方法见 [依赖说明](docs/dependencies.md)。
+
+使用相邻 `../better-trigger`、`../mad-dom` 的开发者仍可运行 `bun run setup:local` 再 `bun install`；这会选择可变的本地构建，验收与 CI 使用 `setup:deps`。
+
+## 启动工作空间
+
+为 Agent Flow 创建独立 PostgreSQL 数据库，例如 `agent_flow_dev`。API 和 worker 使用同一个 `DATABASE_URL`；业务表在 `agent_flow`，worker 操作记录在 `agent_flow_worker`，better-trigger 内部表在 `public`。runtime 显式固定 search path，数据库用户名为 `agent_flow` 时也不会混用业务表。
+
+```sh
+cp apps/server/.env.example apps/server/.env
+cp apps/worker/.env.example apps/worker/.env
+```
+
+编辑数据库地址，并在 worker 配置中设置仓库名称到本地 Git 根目录的映射：
+
+```dotenv
+AGENT_FLOW_REPOS={"my-app":"/absolute/path/to/my-app"}
+```
+
+```sh
 bun dev
 ```
 
-`setup:local` 检查构建产物，并在 Bun 的全局链接注册表注册 `better-trigger`、`@better-trigger/worker`、`mad-dom`；不修改这三个包的源码，也不会自动编译它们。目录不同时可以指定：
+Web 位于 <http://127.0.0.1:5173>，Zebra API 位于 <http://127.0.0.1:3001>。未配置数据库时，健康接口仍可用，业务页面显示配置错误。
 
-```sh
-BETTER_TRIGGER_SOURCE=/path/to/better-trigger MAD_DOM_SOURCE=/path/to/mad-dom bun run setup:local
-```
-
-链接会跟随本地仓库的构建产物变化，`bun.lock` 不能锁定这些仓库的源码版本。源码更新后先在对应仓库重新构建，再运行本项目检查。为避免遗漏链接包的类型变化，typecheck 和 test 暂不使用 Turbo 缓存。发布包齐备后应切换到固定版本依赖，恢复独立 checkout / CI 安装。
-
-## 运行
-
-`bun dev` 同时启动：
-
-- Web：<http://127.0.0.1:5173>
-- Zebra API：<http://127.0.0.1:3001/api/health>
-
-页面中的“服务已连接”表示 Zebra API 可访问，worker 连接状态尚未接入。任务、执行记录和 Workers 页目前展示明确的预览空状态。
-
-`apps/server/.env.example` 和 `apps/web/.env.example` 可复制为各自目录下的 `.env`。改动服务端 HOST/PORT 后，也需要调整 Web 的 `API_PROXY_TARGET`。
-
-生产构建使用同源 `/api`；静态托管需要把 `/api` 反向代理到 Zebra，并为 SPA 路由提供 `index.html` fallback。当前没有启用跨域 API 访问。`vite preview` 只用于查看静态构建，不提供 API 代理。所有服务端构建都保留外部依赖，运行 dist 仍需要已安装的 node_modules 和本地链接。
-
-## Herdr worker
-
-在一个 Herdr 管理的 pane 中，从本仓库执行：
+进入 **Workers → 配对 Worker** 获取一次性配对码。在 Herdr pane 中运行：
 
 ```sh
 bun run worker:check
+bun run worker:pair --code YOUR_PAIRING_CODE
+bun run worker:start
 ```
 
-此命令验证 Herdr 环境、caller IDs 和 CLI 版本，不连接数据库，不控制其他 pane。
+worker 默认将凭证存入权限为 `0600` 的 `~/.agent-flow/worker.json`，重启继续使用同一身份。`AGENT_FLOW_IDENTITY_FILE` 可选择另一份身份文件。配对码十分钟有效且仅可消费一次，服务端只保存凭证哈希。worker 主动建立经过 upgrade 身份校验的 WebSocket；浏览器不持有 worker token。
 
-运行 durable runtime 前，为本项目创建**独立开发数据库**，并复制 `apps/worker/.env.example` 为 `apps/worker/.env`，配置 `DATABASE_URL`。better-trigger 启动时会自动迁移其内部表，所以应使用项目自己的数据库。
+## 完成一次任务
+
+1. 新建项目，仓库标识填写配置中的 `my-app`。默认创建独立 worktree。可配置检查，每行一个 argv JSON 数组，例如 `["bun","test"]`；支持 `bun` 与 `git`。
+2. 新建任务，填写目标与验收条件，选择在线且空闲的 worker 发起执行。
+3. 在运行详情查看步骤、分段日志、连接状态和产物。Codex 默认使用 `workspace-write` 与 `on-request`，需要输入时进入阻塞状态。
+4. 查看实际提示，在“处理阻塞”中记录处理说明。可以重新观察状态，发送明确选择的 Enter/Escape，或向空闲的 agent 补充说明。
+5. 检查通过后审核产物。通过审核会完成任务；拒绝审核或执行失败后可以重试，保留原有历史。
+
+run、命令与事件均持久化。提交使用稳定幂等键，重连补发未确认命令和事件，sequence 防止重复或乱序投影。项目/任务删除会隐藏关联历史，保留内部记录以让丢失的 ACK 仍可收敛。
+
+## 恢复与资源归属
+
+每次外部 mutation 先记录 intent，再保存 Herdr 返回的资源身份。创建或发送任务之后、结果保存之前崩溃，会进入人工核对；不会自动再创建 pane 或重复 prompt。核对时可以登记实际返回结果，或明确证明操作没有发生后允许重试。输入不正确时显示错误，控制连接仍可接受下一次修正。
+
+取消先持久化 intent，再取消 runtime 并停止本次拥有的资源；确认 pane 和记录的进程退出后才标记取消完成。取消过程本身需要核对时，Web 仍提供处理入口。资源归属校验不允许回收用户原有 pane、另一 agent 占用的资源或身份不明的进程。
+
+同一 worker 身份由 PostgreSQL 会话锁保护，并在执行操作前核对锁仍有效。repo 与执行槽位的 lease 跨重启保留；断线不会让另一个任务夺走仍在运行的仓库。每个 worker 使用自己的 runtime namespace。
+
+成功或失败后保留工作目录与完整结果供审核，关闭本次创建的 agent pane。不会自动合并、推送或部署。已完成 worktree 可在审核后通过 Git 手动清理；未提交的改动不会被强制删除。
+
+使用 Ctrl+C 停止 worker；正常停止保留资源和持久进度，下次 `worker:start` 继续核对。开发时可用 `bun run dev:worker` 开启 watch，但升级工作流代码前应完成或取消活动运行。严格回放检测到代码变化会保留明确失败原因，需要在新版本下重新执行。
+
+## 验证
 
 ```sh
-bun run worker:smoke  # 运行纯 echo workflow，验证真实持久化执行后退出
-bun run dev:worker   # 保持 runtime 运行，Ctrl+C 关闭
+bun run check
+bun run worker:smoke
+
+# TEST_DATABASE_URL 的角色须有创建数据库权限；命令创建并清理独立数据库。
+TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres bun run test:integration
+bun x --no-install playwright install chromium
+TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres bun run test:browser
+TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres bun run test:herdr
 ```
 
-默认 namespace 为 `agent-flow/development`，并发为 1。当前 worker 只注册 smoke task，没有网络控制入口；普通启动不会执行 Herdr mutation。缺失数据库配置或未运行于 Herdr 时会明确报错退出。
+`check` 包含 lint、全部 TypeScript、单测/DOM 与生产构建。`worker:smoke` 需要 Herdr 和 `DATABASE_URL`，验证真实 embedded completed run。
 
-## 目录
+数据库集成测试启动真实 Zebra listener 和 embedded runtime，验证 WS 身份、重连、事务、事件去重、锁，以及杀死子进程后的断点恢复。浏览器测试使用 Chromium、真实 API/SSE 和确定性的测试 worker。`test:herdr` 在当前 Herdr session 运行真实 Codex，验证 worktree、实际文件、检查、worker 强制重启、去重、关闭与审核，需要可用的 Codex 登录和 Herdr caller context。
+
+mad-dom 测试使用上游修复后的真实构造器与输入事件，无 iframe 兼容补丁。真实浏览器另行验证表单焦点、键盘、长日志、断线、布局及窄屏。任务列表每页最多渲染 100 条；首版 API 返回完整筛选快照。
+
+## 目录与边界
 
 ```text
-apps/
-  web/          React SPA
-  server/       Zebra Web API
-  worker/       Herdr 内的 durable runtime 宿主
-packages/
-  contracts/    浏览器可用的共享 API 类型
-  herdr/        Herdr CLI 边界；目前仅诊断
-  workflows/    better-trigger task 定义
-scripts/        本地依赖准备
-plans/          后续产品实施方案
+apps/web           React + Vite + TanStack Router/Query
+apps/server        Zebra API、状态投影、WS 与 SSE
+apps/worker        Bun worker、身份、控制连接与恢复
+packages/contracts 浏览器安全 DTO、输入验证、版本化协议
+packages/db        PostgreSQL 业务 schema 与迁移
+packages/herdr     固定 argv、显式目标、归属与 operation journal
+packages/workflows 可注入依赖的版本化 durable workflow
+scripts            固定依赖安装、隔离数据库与端到端验收
 ```
 
-## 校验
+默认仅监听 loopback，并限制浏览器来源。修改开发端口时同时设置 Web 的 `API_PROXY_TARGET` 与 API 的 `AGENT_FLOW_ALLOWED_ORIGINS`。构建使用同源 `/api`；静态托管需要代理该前缀并配置 SPA fallback。server 和 worker 的外部依赖仍须安装，Web 构建不包含数据库、Bun 或控制凭证。
 
-```sh
-bun run check      # lint → typecheck → test → build
-bun run format     # 格式化并应用 Biome 安全修复
-```
-
-常规检查不需要数据库或启动 Herdr agent。`worker:check` 需要 Herdr；`worker:smoke` 另外需要 PostgreSQL。不要用常规检查通过来替代 durable runtime 的数据库集成验收。
-
-mad-dom 的测试 preload 把真实 iframe 元素构造器补充到 Window，供 React 检查 active element；不替代 iframe 行为测试。由于没有布局视口，测试中 scrollTo 为空操作。当前 mad-dom 将 nav/aside/header/main 归类为 HTMLUnknownElement，React 测试会保留相应警告。这套测试仅覆盖当前页面的挂载、Query 状态和路由导航；滚动、布局和完整浏览器兼容性列为后续验收。
+首版不包含团队权限、远程多用户、多机调度、计费、可视化流程编辑器或自动化交付。实现边界与验收证据见 [方案](plans/agent-flow-foundation/plan.md) 和 [验收记录](docs/acceptance.md)。

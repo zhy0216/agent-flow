@@ -1,0 +1,370 @@
+{
+  "verifiedAt": "2026-09-05",
+  "command": "bun run test:herdr",
+  "sourceEvidenceSha256": "ab77a02f918f64cbfa14635a2d85743266cc0c6f44ab7f25cfba09422ad9ee37",
+  "eventSummary": {
+    "count": 108,
+    "firstSequence": 1,
+    "lastSequence": 108,
+    "hasMore": false,
+    "types": {
+      "step.completed": 9,
+      "run.status": 4,
+      "resolution.applied": 1,
+      "log": 47,
+      "agent.state": 47
+    }
+  },
+  "run": {
+    "id": "run_ecd71b58-5c48-4dd9-bda3-dc62d7382373",
+    "issueId": "issue_f4ded497-25f3-4e36-be9b-9929606246bc",
+    "workerId": "worker_018866df-e121-465f-9f72-9154d3a0d727",
+    "workflowVersion": "issue-agent/v1",
+    "idempotencyKey": "acceptance-085de1e8-a351-4e9e-9d9e-2fd8e7453f5c",
+    "runtimeRunId": "run_0294e1dc771b41a29a1db9ea",
+    "status": "succeeded",
+    "error": null,
+    "artifacts": [
+      {
+        "type": "worktree",
+        "label": "Working directory",
+        "value": "/private/var/folders/b6/161n55hx7f7d9lqmqq8h13lw0000gn/T/agent-flow-herdr-yKSgFA/.agent-flow-worktrees/repository-1488de8428441d504b08"
+      },
+      {
+        "type": "branch",
+        "label": "Review branch",
+        "value": "agent-flow/1488de8428441d504b08"
+      },
+      {
+        "type": "diff",
+        "label": "Changes",
+        "value": "\n?? result.txt\n\n\ndiff --git a/result.txt b/result.txt\nnew file mode 100644\nindex 0000000..70802b8\n--- /dev/null\n+++ b/result.txt\n@@ -0,0 +1 @@\n+foundation verified\n\nUntracked files:\nresult.txt"
+      },
+      {
+        "type": "checks",
+        "label": "Verification",
+        "value": "[\n  {\n    \"args\": [\n      \"verify.ts\"\n    ],\n    \"command\": \"bun\",\n    \"exitCode\": 0,\n    \"stdout\": \"verified\\n\",\n    \"stderr\": \"\",\n    \"timedOut\": false\n  }\n]"
+      },
+      {
+        "type": "output",
+        "label": "Agent output",
+        "value": "codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen\n➜  repository-1488de8428441d504b08 codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen\n\n╭────────────────────────────────────────────────────────╮\n│ >_ OpenAI Codex (v0.153.4)                             │\n│                                                        │\n│ model:     gpt-6-astra xhigh   fast   /model to change │\n│ directory: /private/…/repository-1488de8428441d504b08  │\n╰────────────────────────────────────────────────────────╯\n\n  Tip: Try the Desktop app. Run 'codex app' or visit\n  https://chatgpt.com/codex?app-landing-page=true\n\n• You have 1 usage limit reset available. Run /usage to use one.\n\n\n\n› Complete the following task in this working directory. Follow the repository\n  instructions. Run the configured checks and report the result and changed\n  files. Do not merge, push or deploy; the user will review the result.\n\n  Task: Write a verified result\n\n  Create result.txt containing exactly foundation verified and a newline. Run\n  bun verify.ts. Do not change verify.ts. Do not commit. Before your final\n  response, run bun -e 'await Bun.sleep(15000)' once: this gives the test time\n  to restart its worker while your agent remains alive. This is a generated\n  integration fixture.\n\n  Configured checks (argv):\n  [[\"bun\",\"verify.ts\"]]\n\n\n• Session renamed to Complete the following task in this. To resume this session\nrun codex resume, then select Complete the following task in this (01a070e3-eb91-\n7b41-ad2d-ca6b36b68559)\n\n• I’ll check the repository instructions, create result.txt, run bun verify.ts,\n  and then run the requested 15-second wait.\n\n• Ran pwd && rg --files --hidden -g AGENTS.md -g '!node_modules' -g '!.git' &&\n  │ git status --short\n  └ /private/var/folders/b6/161n55hx7f7d9lqmqq8h13lw0000gn/T/\n    agent-flow-herdr-yKSgFA/.agent-flow-worktrees/repository-1488de8428441d504b08\n\n\n• Explored\n  └ List rg --files --hidden -g '!.git' -g '!node_modules' -g verify.ts -g\n  result.txt\n         -g '*AGENTS*'\n\n• Ran git status --short\n  └ (no output)\n\n• Added result.txt (+1 -0)\n    1 +foundation verified\n\n• Ran bun verify.ts\n  └ verified\n\n• Ran git status --short && git diff --exit-code -- verify.ts && od -An -tx1\n  │ result.txt\n  └ ?? result.txt\n               66  6f  75  6e  64  61  74  69  6f  6e  20  76  65  72  69  66\n               69  65  64  0a\n\n\n─────────────────────────────────────────────────────────────────────────────────\n\n• result.txt contains exactly foundation verified followed by a newline.\n  Verification passed, and verify.ts is unchanged. I’ll now run the requested 15-\n  second wait.\n\n• Ran bun -e 'await Bun.sleep(15000)'\n  └ (no output)\n\n─────────────────────────────────────────────────────────────────────────────────\n\n• Created result.txt containing exactly foundation verified\\n.\n\n  - bun verify.ts passed: verified.\n  - verify.ts unchanged.\n  - Requested 15-second wait completed once.\n  - Only changed file: result.txt.\n  - No commit, merge, push, or deployment.\n\n─────────────────────────────────────────────────────────────────────────────────\n\n\n› Ask Codex to do anything\n\n  gpt-6-astra xhigh fast · /private/var/folders/b6/161n55hx7f7d9lqmqq8h13lw0000g…"
+      },
+      {
+        "type": "file",
+        "label": "Full persisted result",
+        "value": "/var/folders/b6/161n55hx7f7d9lqmqq8h13lw0000gn/T/agent-flow-herdr-yKSgFA/artifacts/run_ecd71b58-5c48-4dd9-bda3-dc62d7382373/result.json"
+      }
+    ],
+    "cancelRequested": false,
+    "review": "approved",
+    "lastSequence": 108,
+    "createdAt": "2026-09-05T09:26:14.273Z",
+    "updatedAt": "2026-09-05T09:27:09.114Z"
+  },
+  "restart": {
+    "priorPid": 76994,
+    "nextPid": 78137,
+    "runtimeRunId": "run_0294e1dc771b41a29a1db9ea"
+  },
+  "operations": [
+    {
+      "runId": "run_ecd71b58-5c48-4dd9-bda3-dc62d7382373",
+      "operationId": "close-pane",
+      "kind": "pane.close",
+      "intent": {
+        "paneId": "w41:pH"
+      },
+      "state": "completed",
+      "result": {
+        "paneId": "w41:pH",
+        "stopped": true
+      }
+    },
+    {
+      "runId": "run_ecd71b58-5c48-4dd9-bda3-dc62d7382373",
+      "operationId": "create-pane",
+      "kind": "pane.create",
+      "intent": {
+        "cwd": "/private/var/folders/b6/161n55hx7f7d9lqmqq8h13lw0000gn/T/agent-flow-herdr-yKSgFA/.agent-flow-worktrees/repository-1488de8428441d504b08",
+        "caller": {
+          "tabId": "w41:t1",
+          "paneId": "w41:p1",
+          "workspaceId": "w41"
+        },
+        "direction": "down",
+        "preexistingPaneIds": ["w41:p1", "w41:p3", "w41:p4", "w41:p5", "w41:pB"]
+      },
+      "state": "completed",
+      "result": {
+        "cwd": "/private/var/folders/b6/161n55hx7f7d9lqmqq8h13lw0000gn/T/agent-flow-herdr-yKSgFA/.agent-flow-worktrees/repository-1488de8428441d504b08",
+        "tabId": "w41:t1",
+        "paneId": "w41:pH",
+        "terminalId": "term_65ab8f9f5691019e",
+        "workspaceId": "w41"
+      }
+    },
+    {
+      "runId": "run_ecd71b58-5c48-4dd9-bda3-dc62d7382373",
+      "operationId": "prepare-worktree",
+      "kind": "worktree.create",
+      "intent": {
+        "cwd": "/private/var/folders/b6/161n55hx7f7d9lqmqq8h13lw0000gn/T/agent-flow-herdr-yKSgFA/.agent-flow-worktrees/repository-1488de8428441d504b08",
+        "isolated": true,
+        "repoRoot": "/private/var/folders/b6/161n55hx7f7d9lqmqq8h13lw0000gn/T/agent-flow-herdr-yKSgFA/repository",
+        "targetWasAbsent": true
+      },
+      "state": "completed",
+      "result": {
+        "cwd": "/private/var/folders/b6/161n55hx7f7d9lqmqq8h13lw0000gn/T/agent-flow-herdr-yKSgFA/.agent-flow-worktrees/repository-1488de8428441d504b08",
+        "branch": "agent-flow/1488de8428441d504b08",
+        "isolated": true
+      }
+    },
+    {
+      "runId": "run_ecd71b58-5c48-4dd9-bda3-dc62d7382373",
+      "operationId": "resolution:command_a1e46bfc-7259-4e77-baed-dfc7844a3b7b:keys",
+      "kind": "agent.keys",
+      "intent": {
+        "keys": ["enter"],
+        "paneId": "w41:pH"
+      },
+      "state": "completed",
+      "result": {
+        "sent": true,
+        "paneId": "w41:pH"
+      }
+    },
+    {
+      "runId": "run_ecd71b58-5c48-4dd9-bda3-dc62d7382373",
+      "operationId": "run-checks",
+      "kind": "checks.run",
+      "intent": {
+        "cwd": "/private/var/folders/b6/161n55hx7f7d9lqmqq8h13lw0000gn/T/agent-flow-herdr-yKSgFA/.agent-flow-worktrees/repository-1488de8428441d504b08",
+        "checks": [
+          {
+            "args": ["verify.ts"],
+            "command": "bun"
+          }
+        ]
+      },
+      "state": "completed",
+      "result": [
+        {
+          "args": ["verify.ts"],
+          "stderr": "",
+          "stdout": "verified\n",
+          "command": "bun",
+          "exitCode": 0,
+          "timedOut": false
+        }
+      ]
+    },
+    {
+      "runId": "run_ecd71b58-5c48-4dd9-bda3-dc62d7382373",
+      "operationId": "send-prompt",
+      "kind": "agent.prompt",
+      "intent": {
+        "text": "Complete the following task in this working directory. Follow the repository instructions. Run the configured checks and report the result and changed files. Do not merge, push or deploy; the user will review the result.\n\nTask: Write a verified result\n\nCreate result.txt containing exactly foundation verified and a newline. Run bun verify.ts. Do not change verify.ts. Do not commit. Before your final response, run bun -e 'await Bun.sleep(15000)' once: this gives the test time to restart its worker while your agent remains alive. This is a generated integration fixture.\n\nConfigured checks (argv):\n[[\"bun\",\"verify.ts\"]]\n",
+        "paneId": "w41:pH"
+      },
+      "state": "completed",
+      "result": {
+        "state": "working",
+        "paneId": "w41:pH",
+        "submitted": true
+      }
+    },
+    {
+      "runId": "run_ecd71b58-5c48-4dd9-bda3-dc62d7382373",
+      "operationId": "start-agent",
+      "kind": "agent.start",
+      "intent": {
+        "kind": "codex",
+        "name": "af-1488de8428441d504b08",
+        "model": null,
+        "paneId": "w41:pH",
+        "sandbox": "workspace-write",
+        "approval": "on-request"
+      },
+      "state": "completed",
+      "result": {
+        "cwd": "/private/var/folders/b6/161n55hx7f7d9lqmqq8h13lw0000gn/T/agent-flow-herdr-yKSgFA/.agent-flow-worktrees/repository-1488de8428441d504b08",
+        "kind": "codex",
+        "name": "af-1488de8428441d504b08",
+        "state": "blocked",
+        "tabId": "w41:t1",
+        "paneId": "w41:pH",
+        "terminalId": "term_65ab8f9f5691019e",
+        "workspaceId": "w41",
+        "processGroupId": 77309
+      }
+    }
+  ],
+  "lifecycleEvents": [
+    {
+      "runId": "run_ecd71b58-5c48-4dd9-bda3-dc62d7382373",
+      "sequence": 1,
+      "type": "step.completed",
+      "timestamp": "2026-09-05T09:26:14.296Z",
+      "payload": {
+        "step": "validate"
+      }
+    },
+    {
+      "runId": "run_ecd71b58-5c48-4dd9-bda3-dc62d7382373",
+      "sequence": 2,
+      "type": "run.status",
+      "timestamp": "2026-09-05T09:26:14.300Z",
+      "payload": {
+        "error": null,
+        "status": "running"
+      }
+    },
+    {
+      "runId": "run_ecd71b58-5c48-4dd9-bda3-dc62d7382373",
+      "sequence": 3,
+      "type": "step.completed",
+      "timestamp": "2026-09-05T09:26:14.341Z",
+      "payload": {
+        "step": "prepare-worktree"
+      }
+    },
+    {
+      "runId": "run_ecd71b58-5c48-4dd9-bda3-dc62d7382373",
+      "sequence": 4,
+      "type": "step.completed",
+      "timestamp": "2026-09-05T09:26:14.358Z",
+      "payload": {
+        "step": "create-pane"
+      }
+    },
+    {
+      "runId": "run_ecd71b58-5c48-4dd9-bda3-dc62d7382373",
+      "sequence": 5,
+      "type": "step.completed",
+      "timestamp": "2026-09-05T09:26:18.826Z",
+      "payload": {
+        "step": "start-agent"
+      }
+    },
+    {
+      "runId": "run_ecd71b58-5c48-4dd9-bda3-dc62d7382373",
+      "sequence": 6,
+      "type": "run.status",
+      "timestamp": "2026-09-05T09:26:18.841Z",
+      "payload": {
+        "error": "Agent is blocked; prompt was not sent.",
+        "paneId": "w41:pH",
+        "status": "blocked",
+        "operations": []
+      }
+    },
+    {
+      "runId": "run_ecd71b58-5c48-4dd9-bda3-dc62d7382373",
+      "sequence": 7,
+      "type": "resolution.applied",
+      "timestamp": "2026-09-05T09:26:20.285Z",
+      "payload": {
+        "note": "Acceptance gate verified its own generated fixture; allow this directory only."
+      }
+    },
+    {
+      "runId": "run_ecd71b58-5c48-4dd9-bda3-dc62d7382373",
+      "sequence": 8,
+      "type": "run.status",
+      "timestamp": "2026-09-05T09:26:20.287Z",
+      "payload": {
+        "error": null,
+        "status": "running"
+      }
+    },
+    {
+      "runId": "run_ecd71b58-5c48-4dd9-bda3-dc62d7382373",
+      "sequence": 9,
+      "type": "step.completed",
+      "timestamp": "2026-09-05T09:26:21.841Z",
+      "payload": {
+        "step": "send-prompt"
+      }
+    },
+    {
+      "runId": "run_ecd71b58-5c48-4dd9-bda3-dc62d7382373",
+      "sequence": 104,
+      "type": "step.completed",
+      "timestamp": "2026-09-05T09:27:08.146Z",
+      "payload": {
+        "step": "run-checks"
+      }
+    },
+    {
+      "runId": "run_ecd71b58-5c48-4dd9-bda3-dc62d7382373",
+      "sequence": 105,
+      "type": "step.completed",
+      "timestamp": "2026-09-05T09:27:08.175Z",
+      "payload": {
+        "step": "summarize-diff"
+      }
+    },
+    {
+      "runId": "run_ecd71b58-5c48-4dd9-bda3-dc62d7382373",
+      "sequence": 106,
+      "type": "step.completed",
+      "timestamp": "2026-09-05T09:27:08.177Z",
+      "payload": {
+        "step": "save-artifacts"
+      }
+    },
+    {
+      "runId": "run_ecd71b58-5c48-4dd9-bda3-dc62d7382373",
+      "sequence": 107,
+      "type": "step.completed",
+      "timestamp": "2026-09-05T09:27:08.241Z",
+      "payload": {
+        "step": "close-pane"
+      }
+    },
+    {
+      "runId": "run_ecd71b58-5c48-4dd9-bda3-dc62d7382373",
+      "sequence": 108,
+      "type": "run.status",
+      "timestamp": "2026-09-05T09:27:08.243Z",
+      "payload": {
+        "error": null,
+        "status": "succeeded",
+        "artifacts": [
+          {
+            "type": "worktree",
+            "label": "Working directory",
+            "value": "/private/var/folders/b6/161n55hx7f7d9lqmqq8h13lw0000gn/T/agent-flow-herdr-yKSgFA/.agent-flow-worktrees/repository-1488de8428441d504b08"
+          },
+          {
+            "type": "branch",
+            "label": "Review branch",
+            "value": "agent-flow/1488de8428441d504b08"
+          },
+          {
+            "type": "diff",
+            "label": "Changes",
+            "value": "\n?? result.txt\n\n\ndiff --git a/result.txt b/result.txt\nnew file mode 100644\nindex 0000000..70802b8\n--- /dev/null\n+++ b/result.txt\n@@ -0,0 +1 @@\n+foundation verified\n\nUntracked files:\nresult.txt"
+          },
+          {
+            "type": "checks",
+            "label": "Verification",
+            "value": "[\n  {\n    \"args\": [\n      \"verify.ts\"\n    ],\n    \"command\": \"bun\",\n    \"exitCode\": 0,\n    \"stdout\": \"verified\\n\",\n    \"stderr\": \"\",\n    \"timedOut\": false\n  }\n]"
+          },
+          {
+            "type": "output",
+            "label": "Agent output",
+            "value": "codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen\n➜  repository-1488de8428441d504b08 codex --sandbox workspace-write --ask-for-approval on-request --no-alt-screen\n\n╭────────────────────────────────────────────────────────╮\n│ >_ OpenAI Codex (v0.153.4)                             │\n│                                                        │\n│ model:     gpt-6-astra xhigh   fast   /model to change │\n│ directory: /private/…/repository-1488de8428441d504b08  │\n╰────────────────────────────────────────────────────────╯\n\n  Tip: Try the Desktop app. Run 'codex app' or visit\n  https://chatgpt.com/codex?app-landing-page=true\n\n• You have 1 usage limit reset available. Run /usage to use one.\n\n\n\n› Complete the following task in this working directory. Follow the repository\n  instructions. Run the configured checks and report the result and changed\n  files. Do not merge, push or deploy; the user will review the result.\n\n  Task: Write a verified result\n\n  Create result.txt containing exactly foundation verified and a newline. Run\n  bun verify.ts. Do not change verify.ts. Do not commit. Before your final\n  response, run bun -e 'await Bun.sleep(15000)' once: this gives the test time\n  to restart its worker while your agent remains alive. This is a generated\n  integration fixture.\n\n  Configured checks (argv):\n  [[\"bun\",\"verify.ts\"]]\n\n\n• Session renamed to Complete the following task in this. To resume this session\nrun codex resume, then select Complete the following task in this (01a070e3-eb91-\n7b41-ad2d-ca6b36b68559)\n\n• I’ll check the repository instructions, create result.txt, run bun verify.ts,\n  and then run the requested 15-second wait.\n\n• Ran pwd && rg --files --hidden -g AGENTS.md -g '!node_modules' -g '!.git' &&\n  │ git status --short\n  └ /private/var/folders/b6/161n55hx7f7d9lqmqq8h13lw0000gn/T/\n    agent-flow-herdr-yKSgFA/.agent-flow-worktrees/repository-1488de8428441d504b08\n\n\n• Explored\n  └ List rg --files --hidden -g '!.git' -g '!node_modules' -g verify.ts -g\n  result.txt\n         -g '*AGENTS*'\n\n• Ran git status --short\n  └ (no output)\n\n• Added result.txt (+1 -0)\n    1 +foundation verified\n\n• Ran bun verify.ts\n  └ verified\n\n• Ran git status --short && git diff --exit-code -- verify.ts && od -An -tx1\n  │ result.txt\n  └ ?? result.txt\n               66  6f  75  6e  64  61  74  69  6f  6e  20  76  65  72  69  66\n               69  65  64  0a\n\n\n─────────────────────────────────────────────────────────────────────────────────\n\n• result.txt contains exactly foundation verified followed by a newline.\n  Verification passed, and verify.ts is unchanged. I’ll now run the requested 15-\n  second wait.\n\n• Ran bun -e 'await Bun.sleep(15000)'\n  └ (no output)\n\n─────────────────────────────────────────────────────────────────────────────────\n\n• Created result.txt containing exactly foundation verified\\n.\n\n  - bun verify.ts passed: verified.\n  - verify.ts unchanged.\n  - Requested 15-second wait completed once.\n  - Only changed file: result.txt.\n  - No commit, merge, push, or deployment.\n\n─────────────────────────────────────────────────────────────────────────────────\n\n\n› Ask Codex to do anything\n\n  gpt-6-astra xhigh fast · /private/var/folders/b6/161n55hx7f7d9lqmqq8h13lw0000g…"
+          },
+          {
+            "type": "file",
+            "label": "Full persisted result",
+            "value": "/var/folders/b6/161n55hx7f7d9lqmqq8h13lw0000gn/T/agent-flow-herdr-yKSgFA/artifacts/run_ecd71b58-5c48-4dd9-bda3-dc62d7382373/result.json"
+          }
+        ]
+      }
+    }
+  ]
+}

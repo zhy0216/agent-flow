@@ -2,13 +2,6 @@ import { afterAll } from "bun:test";
 import { Window } from "mad-dom";
 
 const dom = new Window({ url: "http://localhost:5173" });
-// mad-dom implements iframe elements but does not expose this constructor on
-// Window yet. React reads it when inspecting the active element. Reuse the
-// actual implementation; this adapter does not emulate iframe navigation.
-Object.defineProperty(dom, "HTMLIFrameElement", {
-  configurable: true,
-  value: dom.document.createElement("iframe").constructor,
-});
 const globals = {
   window: dom,
   document: dom.document,

@@ -1,3 +1,4 @@
+import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 
 const repoRoot = resolve(import.meta.dir, "..");
@@ -36,10 +37,21 @@ for (const pkg of packages) {
   }
 }
 
+// This command deliberately opts into mutable upstream development sources.
+// Keep its registrations in this checkout, matching setup:deps and bunfig.toml.
+const registry = resolve(repoRoot, ".local-deps/bun-global");
+const binDirectory = resolve(repoRoot, ".local-deps/bin");
+await mkdir(registry, { recursive: true });
+await mkdir(binDirectory, { recursive: true });
 // Bun's link: protocol resolves registered package names, not relative paths.
 for (const pkg of packages) {
   const child = Bun.spawn(["bun", "link"], {
     cwd: pkg.directory,
+    env: {
+      ...process.env,
+      BUN_INSTALL_GLOBAL_DIR: registry,
+      BUN_INSTALL_BIN: binDirectory,
+    },
     stdout: "inherit",
     stderr: "inherit",
   });

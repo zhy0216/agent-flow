@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "tools": {
+    "bun": "1.4.0",
+    "node": "22.22.3",
+    "rust": "1.93.1"
+  },
+  "dependencies": [
+    {
+      "name": "better-trigger",
+      "repository": "https://github.com/zhy0216/better-trigger.git",
+      "revision": "943958579cd75853f5fd699156e41b075a2a0826",
+      "patches": [],
+      "packages": [
+        {
+          "directory": "packages/sdk",
+          "name": "better-trigger",
+          "artifact": "dist/index.js"
+        },
+        {
+          "directory": "apps/worker",
+          "name": "@better-trigger/worker",
+          "artifact": "dist/embedded.js"
+        }
+      ]
+    },
+    {
+      "name": "mad-dom",
+      "repository": "https://github.com/zhy0216/mad-dom.git",
+      "revision": "2672439a55f0f43f2fa30826b82ac88e91095fcf",
+      "patches": [
+        {
+          "file": "patches/mad-dom-react19.patch",
+          "sha256": "2deffb3e8446e5b891ace05ca997dbf65029829acd1972be37134f663394197d"
+        }
+      ],
+      "packages": [
+        {
+          "directory": ".",
+          "name": "mad-dom",
+          "artifact": "build/mad-dom.node"
+        }
+      ]
+    }
+  ]
+}

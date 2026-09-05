@@ -9,11 +9,28 @@
       "env": ["VITE_API_ORIGIN"]
     },
     "typecheck": { "dependsOn": ["^typecheck"], "outputs": [], "cache": false },
-    "test": { "dependsOn": ["^build"], "outputs": [], "cache": false },
+    "test": {
+      "dependsOn": ["^build"],
+      "outputs": [],
+      "cache": false,
+      "passThroughEnv": ["TEST_DATABASE_URL"]
+    },
     "dev": {
       "cache": false,
       "persistent": true,
-      "passThroughEnv": ["HOST", "PORT", "API_PROXY_TARGET", "VITE_API_ORIGIN"]
+      "passThroughEnv": [
+        "HOST",
+        "PORT",
+        "DATABASE_URL",
+        "API_PROXY_TARGET",
+        "VITE_API_ORIGIN",
+        "AGENT_FLOW_ALLOWED_ORIGINS",
+        "AGENT_FLOW_API_URL",
+        "AGENT_FLOW_IDENTITY_FILE",
+        "AGENT_FLOW_WORKER_NAME",
+        "AGENT_FLOW_REPOS",
+        "AGENT_FLOW_POLL_MS"
+      ]
     }
   }
 }

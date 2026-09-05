@@ -1,6 +1,6 @@
 # Agent Flow 项目初始化与首版产品方案
 
-日期：2026-09-05。状态：初始化已落地，以下产品功能待实施。本次不拆 todos、不自动执行后续阶段。
+日期：2026-09-05。状态：M0–M6 已实现并通过本地验收，包括固定依赖的独立 checkout、数据库故障恢复、Chromium 和真实 Herdr/Codex 执行。本文保留首版目标与设计，当前实现和验证记录见 [验收记录](../../docs/acceptance.md)。
 
 ## 意图
 
@@ -21,7 +21,7 @@
 | 执行位置 | Herdr 内的本地 Bun worker | 用户明确 worker 会控制 Herdr |
 | DOM | mad-dom | 用户指定 `../mad-dom`；原生模块已能在当前机器加载 |
 | 首版范围 | 单用户、本地单 worker、并发 1 | 尚未收到拓扑偏好确认，作为可调整的 MVP 假设 |
-| UI 与 ORM | 初始 CSS；业务 ORM 未选定 | 用户尚未指定，业务持久化阶段再决定 |
+| UI 与 ORM | 原生 CSS；Bun SQL 与版本化 SQL migration | 首版无需额外组件库或 ORM；事务、约束和查询直接在数据库层维护 |
 
 参考证据：
 
@@ -44,21 +44,21 @@
 
 首版不包含团队权限、计费、完整 Linear 功能、可视化 workflow 编排器、多机全局调度、自动合并或部署。用户的现有 Herdr pane/agent 不作为可回收资源。多用户与远程多 worker 将在单 worker 的恢复语义稳定后推进。
 
-## 本轮初始化成果
+## 最终实现目录
 
 ```text
-apps/web        React + Vite + Router + Query；任务/执行/worker 预览路由
-apps/server     Zebra；GET /api/health；配置与入口
-apps/worker     Herdr 环境诊断；better-trigger embedded host；smoke 命令
-packages/contracts   浏览器安全的健康响应类型
-packages/herdr       caller context 校验、固定 argv、超时与错误处理
-packages/workflows   带 payload 校验的纯 smoke task
-scripts/link-local.ts 本地构建检查和 Bun 名称链接注册
+apps/web        项目/任务 CRUD、URL 筛选、运行详情、实时日志、人工介入和审核
+apps/server     Zebra HTTP/WS/SSE、认证配对、事务 outbox、事件投影
+apps/worker     稳定身份、控制连接、embedded runtime、持久恢复与资源管理
+packages/contracts   浏览器安全 DTO、输入 schema、状态机、v1 消息协议
+packages/db          agent_flow 业务 schema、版本化 migrations 与事务查询
+packages/herdr       typed CLI adapter、operation journal、身份和资源归属
+packages/workflows   可注入依赖的 issue-agent.v1 与 smoke task
+scripts/setup-deps.ts 固定源码与补丁、隔离 Bun 链接、原生构建与冻结安装
+scripts/test-*.ts     隔离数据库、故障恢复、真实 Herdr 验收入口
 ```
 
-根目录已建立 Git main、Bun lockfile、Turbo task graph、共享 TypeScript 配置、Biome 和开发脚本。Web/API 可独立于数据库运行；worker 的数据库执行需要额外配置。
-
-这里的健康 API 只证明 Web server 存活。当前空页面不是持久化数据；worker 尚未注册到 API，也没有创建 pane、发送 prompt、建立 Web 控制接口。
+根目录包含 Bun lockfile、Turbo task graph、共享 TypeScript 配置、Biome、固定依赖 manifest 和 CI。Web/API 在未配置数据库时保留健康诊断，业务功能和 worker 需要独立 PostgreSQL 数据库。页面使用真实 API 数据，空状态和连接错误均有明确展示。
 
 ## 整体方案
 
@@ -75,7 +75,7 @@ flowchart LR
   API -->|实时订阅| Web
 ```
 
-该图是目标拓扑。初始化只连接了 Web → API 以及 worker → embedded runtime 的入口。
+上述拓扑已实现。业务表在 `agent_flow`，worker ledger 在 `agent_flow_worker`，runtime 内部表在 `public`；runtime 连接显式设置 search path，避免同名数据库角色将 runtime 查询路由到业务表。
 
 ### 模块职责与依赖
 
@@ -84,8 +84,8 @@ flowchart LR
 - `apps/worker` 持有本地 repo 配置、Herdr caller context、控制连接和一个 embedded runtime。它以 runtime client 提交和观察任务，负责协议边界与资源生命周期。
 - `packages/workflows` 定义内置 workflow 及稳定 step 名称；Herdr 实现经显式依赖/工厂注入，避免 workflow 定义隐式读取调用者焦点。
 - `packages/herdr` 是唯一的 Herdr CLI 出口：命令白名单、argv、明确目标、timeout、JSON 输出解析、错误映射与资源归属检查。
-- `packages/contracts` 后续增加 runtime schema、错误码和版本化消息。只共享序列化 DTO，不向浏览器导出数据库、Bun、Herdr 或 workflow runtime 模块。
-- 业务持久化出现后增加 `packages/db`。MVP 可与 runtime 使用同一个开发 Postgres 实例，但以独立 schema/migration 维护；不让产品逻辑直接写 better-trigger 内部表。
+- `packages/contracts` 提供 runtime schema、错误码和版本化消息。只共享序列化 DTO，不向浏览器导出数据库、Bun、Herdr 或 workflow runtime 模块。
+- `packages/db` 独立维护业务 schema/migration。MVP 与 runtime 使用同一个开发 Postgres 实例；产品逻辑不直接写 better-trigger 内部表。
 
 ### Web → worker 控制通道
 
@@ -93,7 +93,7 @@ flowchart LR
 
 在 `packages/contracts` 定义协议版本及最小 envelope：`type`、`requestId`、`workerId`、`runId`、`sequence`、`payload`。服务端保留待交付命令及 ack 状态；worker 以稳定 `requestId` 去重。重连携带上次确认游标，重发未确认命令并补传事件。只允许合法的状态迁移，重复事件不重复写业务结果。
 
-初始化尚未实现认证。接入控制能力时添加一次性配对凭证与 worker token；Zebra 的 WS upgrade 必须在 `onUpgrade` 中验证身份，不能假设普通 HTTP middleware 已执行。默认只绑定 loopback；远程部署前补全 Web 用户认证、来源校验和传输加密。
+控制通道已实现十分钟有效的一次性配对码与 worker token，服务端仅存哈希。Zebra 的 WS upgrade 在 `onUpgrade` 中独立验证身份及来源。默认只绑定 loopback；浏览器来源受限。远程部署前仍须增加 Web 用户认证与传输加密。
 
 ### 领域模型
 
@@ -131,7 +131,7 @@ workflow 在初版固定于单 worker。扩展多机前必须决定 worker affin
 
 先完成任务列表与详情、运行详情、worker 页面。URL 保存项目和筛选条件；Query mutations 完成后精确失效相关查询。网络事件按 run 与 sequence 更新缓存，重连后重新获取快照。终端大日志分段加载，后续再引入虚拟列表。
 
-状态要表达 queued、执行中、等待用户、连接中断、失败和结果待审核。展示真实空状态与错误，不把 worker 断线显示为成功。UI 组件库、主题方案和是否采用 TanStack Table/Form 在实现 CRUD 时确认。
+状态表达 queued、执行中、等待用户、连接中断、失败和结果待审核。展示真实空状态与错误，不把 worker 断线显示为成功。首版采用原生 CSS 深色界面和表单，无需额外 Table/Form 依赖。
 
 ## 拆解与依赖
 
@@ -153,7 +153,7 @@ workflow 在初版固定于单 worker。扩展多机前必须决定 worker affin
 当前仓库命令：
 
 ```sh
-bun run setup:local
+bun run setup:deps
 bun install --frozen-lockfile
 bun run lint
 bun run typecheck
@@ -163,6 +163,11 @@ bun dev
 bun run worker:check
 # 配置独立开发 DATABASE_URL 后，在 Herdr 中执行：
 bun run worker:smoke
+# TEST_DATABASE_URL 必须允许创建独立测试数据库：
+bun run test:integration
+bun x --no-install playwright install chromium
+bun run test:browser
+bun run test:herdr
 ```
 
 首版测试分层：
@@ -173,16 +178,16 @@ bun run worker:smoke
 - 单独的 Postgres 集成套件覆盖迁移、trigger、step replay、租约与故障恢复，使用隔离数据库，不依赖常驻个人数据。
 - Herdr 集成在专用测试会话/owned pane 中进行，覆盖重复提交、claim 后崩溃、创建 pane 后崩溃、prompt 后断连、blocked、取消和 worker 重启。
 
-本轮没有配置 PostgreSQL，因此不把初始化的 build/test 结果视为 durable 执行、Herdr mutation 或端到端产品完成。
+验收使用专门启动的 PostgreSQL 15 实例；集成入口为每次执行创建并清理独立数据库。真实 Herdr 验收仅使用本次创建的 fixture、worktree 和 pane，不操作用户已有资源。命令输出与阶段对应关系见 [验收记录](../../docs/acceptance.md)。
 
 ## 风险、假设与后续需确认项
 
-1. **依赖发布物**：better-trigger npm 尚无发布物，mad-dom JS/native 版本尚不齐，当前使用本地链接。链接依赖外部构建与 Bun 全局注册，lockfile 无法锁定其源码；M6 前应固定可复现发布物/构建版本，不直接添加无法跑通的 CI。
+1. **依赖发布物**：`dependencies.lock.json` 固定 better-trigger、mad-dom Git revision 和补丁哈希，`setup:deps` 在仓库私有链接目录构建和安装。独立 checkout 已验证首次安装、重复安装及源码漂移拒绝；不依赖相邻仓库。详见 [依赖说明](../../docs/dependencies.md)。
 2. **Zebra 类型发布**：1.0.0 直接发布 TS 源码，其中存在非 type-only 类型导入。server 单独关闭 `verbatimModuleSyntax`，保留其他 strict 检查；上游修复后可恢复。
-3. **mad-dom React 兼容**：当前本地 Window 未暴露 React 19 使用的 `HTMLIFrameElement`，测试 preload 已从真实 iframe 元素取得构造器并补充映射；部分语义元素仍被识别为 HTMLUnknownElement，保留 React 的警告。当前测试仅验证本应用挂载/导航，不代表 iframe、焦点等完整兼容；上游修复后移除适配。
+3. **mad-dom React 兼容**：按用户要求在当前 Herdr session 启动 Codex yolo 修改上游，补充真实 `HTMLIFrameElement`、语义元素与 `oninput`。应用已删除临时构造器映射。上游变更作为固定补丁纳入可复现安装；真实布局与焦点仍由 Chromium 测试验证。
 4. **数据库位置**：本轮按本地单 worker 假设。Web/API 远程、数据库分离或多 worker 会影响控制通道、凭证与调度归属，扩展前需要明确。
 5. **非幂等副作用**：runtime 恢复与 Herdr 执行不在一个事务；必须保留不确定状态与人工核对路径，不能承诺外部动作绝对只执行一次。
-6. **流程与产品细节**：首条 workflow 用哪个 agent、是否默认 worktree、检查命令如何配置、是否需要规划/审核多 agent 阶段，都尚未由用户指定。先以单 agent 执行 + 人工审核为默认。
-7. **UI / ORM / Auth**：尚未指定额外库。单用户本地原型不预先加入团队系统；控制通道与远程暴露阶段仍需对应的身份和访问边界。
+6. **流程与产品细节**：首条 workflow 使用 Codex（`workspace-write`、`on-request`），项目默认隔离 worktree，检查以 argv 数组配置。检查通过进入待审核，人工通过后任务完成。关闭 owned pane，保留工作目录与未提交 diff；不自动合并、推送或部署。
+7. **UI / ORM / Auth**：原生 CSS 与 Bun SQL 满足首版；保留单用户本地边界。worker 身份与来源校验已实现，团队系统和远程用户认证属于 Roadmap。
 
 如果用户确认从第一天需要团队协作或远程多 worker，应先修订 M1/M2 的身份、权限、数据库拓扑和调度归属，再实施业务功能。

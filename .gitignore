@@ -7,3 +7,6 @@ coverage/
 !.env.example
 *.log
 .DS_Store
+.local-deps/
+test-results/
+playwright-report/
