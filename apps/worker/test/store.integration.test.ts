@@ -1,9 +1,50 @@
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import type { WorkerCommand } from "@agent-flow/contracts";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import type { RunEvent, WorkerCommand } from "@agent-flow/contracts";
+import { withTestDatabase } from "../../../scripts/with-test-db";
 import { type Submission, WorkerStore } from "../src/store";
 
 const url = process.env.TEST_DATABASE_URL;
 const suite = url ? describe : describe.skip;
+
+interface PlanNode {
+  "Node Type": string;
+  "Relation Name"?: string;
+  "Index Name"?: string;
+  "Actual Rows": number;
+  "Actual Loops": number;
+  "Rows Removed by Filter"?: number;
+  "Shared Hit Blocks": number;
+  "Shared Read Blocks": number;
+  Plans?: PlanNode[];
+}
+
+function planNodes(node: PlanNode): PlanNode[] {
+  return [node, ...(node.Plans ?? []).flatMap(planNodes)];
+}
+
+async function explainRead<T>(store: WorkerStore, read: () => Promise<T>) {
+  // Observe the real Drizzle query and bindings, including the worker filter
+  // and LIMIT. A separately maintained SQL copy could hide a query regression.
+  const queries = spyOn(store.sql, "unsafe");
+  let result: T;
+  let statement: string;
+  let parameters: Parameters<typeof store.sql.unsafe>[1];
+  try {
+    result = await read();
+    const query = queries.mock.calls[0];
+    if (!query) throw new Error("Expected a WorkerStore query");
+    [statement, parameters] = query;
+  } finally {
+    queries.mockRestore();
+  }
+  const [row] = await store.sql.unsafe<
+    { "QUERY PLAN": { Plan: PlanNode; "Execution Time": number }[] }[]
+  >(`EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${statement}`, parameters);
+  const plan = row?.["QUERY PLAN"][0];
+  if (!plan) throw new Error("Expected a PostgreSQL query plan");
+  return { result, plan };
+}
+
 suite("worker durable PostgreSQL boundary", () => {
   const workerId = `test-worker-${crypto.randomUUID()}`;
   let store: WorkerStore;
@@ -151,6 +192,186 @@ suite("worker durable PostgreSQL boundary", () => {
     } finally {
       await other.close();
     }
+  });
+  test("pending polls use partial indexes instead of scanning completed history", async () => {
+    await withTestDatabase(async (databaseUrl) => {
+      const pending = new WorkerStore(databaseUrl, "query-worker");
+      try {
+        await pending.migrate();
+        await pending.sql`WITH fixture AS (
+          SELECT 'history-' || lpad(n::text, 5, '0') AS run_id,
+            CASE WHEN n % 2 = 0 THEN 'query-worker' ELSE 'query-other' END AS worker_id,
+            (ARRAY['succeeded','failed','cancelled'])[1 + n % 3] AS status
+          FROM generate_series(1, 5000) AS n
+          UNION ALL VALUES ('pending-a', 'query-worker', 'running'),
+            ('pending-c', 'query-worker', 'blocked'), ('pending-b', 'query-other', 'running')
+        ) INSERT INTO agent_flow_worker.executions (run_id, worker_id, submission, status)
+          SELECT run_id, worker_id, jsonb_build_object('version', 1, 'type', 'run.submit',
+            'requestId', 'submit-' || run_id, 'runId', run_id, 'workerId', worker_id,
+            'payload', ${JSON.stringify(command.payload)}::text::jsonb || jsonb_build_object(
+              'run', ${JSON.stringify(command.payload.run)}::text::jsonb ||
+                jsonb_build_object('id', run_id, 'workerId', worker_id))), status FROM fixture`;
+        await pending.sql`INSERT INTO agent_flow_worker.events (run_id, sequence, event_key, event, acknowledged)
+          SELECT run_id, seq, 'log-' || seq,
+            jsonb_build_object('runId', run_id, 'sequence', seq, 'type', 'log',
+              'timestamp', '2026-01-01T00:00:00.000Z', 'payload', jsonb_build_object('text', repeat('x', 100))), true
+          FROM agent_flow_worker.executions CROSS JOIN generate_series(1, 10) AS seq
+          WHERE run_id LIKE 'history-%'`;
+        await pending.sql`INSERT INTO agent_flow_worker.events (run_id, sequence, event_key, event)
+          SELECT run_id, seq, 'log-' || seq,
+            jsonb_build_object('runId', run_id, 'sequence', seq, 'type', 'log',
+              'timestamp', '2026-01-01T00:00:00.000Z', 'payload', jsonb_build_object('text', 'pending'))
+          FROM (VALUES ('pending-c'), ('pending-a')) AS runs(run_id) CROSS JOIN generate_series(5, 1, -1) AS seq`;
+        await pending.sql`WITH fixture AS (
+          SELECT n, 'command-' || n AS request_id,
+            CASE WHEN n % 2 = 0 THEN 'query-worker' ELSE 'query-other' END AS worker_id
+          FROM generate_series(1, 10010) AS n
+        ) INSERT INTO agent_flow_worker.commands (request_id, worker_id, command, handled, created_at)
+          SELECT request_id, worker_id, jsonb_build_object('version', 1, 'type', 'run.cancel',
+            'requestId', request_id, 'workerId', worker_id, 'runId', 'pending-a',
+            'payload', jsonb_build_object('reason', 'Fixture cancellation')), n <= 10000,
+            '2026-01-01'::timestamptz + (n / 4) * interval '1 second' FROM fixture ORDER BY n DESC`;
+        await pending.sql`INSERT INTO agent_flow_worker.resolutions (request_id, run_id, payload, consumed, created_at)
+          SELECT 'resolution-' || n,
+            CASE WHEN n <= 1000 THEN 'history-' || lpad(n::text, 5, '0') ELSE 'pending-a' END,
+            '{"action":"resume","note":"Verified the original pane"}'::jsonb, n <= 1000,
+            '2026-01-01'::timestamptz FROM generate_series(1002, 1, -1) AS n`;
+        for (const table of ["events", "executions", "commands", "resolutions"])
+          await pending.sql.unsafe(`ANALYZE agent_flow_worker.${table}`);
+        const events = await explainRead(pending, () => pending.events());
+        expect(
+          events.result.map(({ runId, sequence }) => [runId, sequence]),
+        ).toEqual(
+          ["pending-a", "pending-c"].flatMap((id) =>
+            Array.from({ length: 5 }, (_, n) => [id, n + 1]),
+          ),
+        );
+        const commands = await explainRead(pending, () => pending.commands());
+        expect(commands.result.map((item) => item.requestId)).toEqual([
+          "command-10002",
+          "command-10004",
+          "command-10006",
+          "command-10008",
+          "command-10010",
+        ]);
+        const resolution = await explainRead(pending, () =>
+          pending.resolution("pending-a"),
+        );
+        expect(resolution.result?.requestId).toBe("resolution-1001");
+        const active = await explainRead(pending, () => pending.active());
+        expect(active.result.map((item) => item.runId).sort()).toEqual([
+          "pending-a",
+          "pending-c",
+        ]);
+        // Only assert index use on this analyzed, history-heavy fixture. Keep
+        // planner node choices and elapsed time as evidence, not snapshots/SLOs.
+        for (const [index, { plan }] of [
+          ["events_unacknowledged", events],
+          ["commands_unhandled", commands],
+          ["resolutions_unconsumed", resolution],
+          ["executions_active", active],
+        ] as const) {
+          const nodes = planNodes(plan.Plan);
+          expect(nodes.some((node) => node["Index Name"] === index)).toBe(true);
+          expect(
+            nodes.reduce(
+              (total, node) =>
+                total +
+                (node["Rows Removed by Filter"] ?? 0) * node["Actual Loops"],
+              0,
+            ),
+          ).toBeLessThan(100);
+          console.info(
+            "Worker pending query plan",
+            JSON.stringify({
+              index,
+              executionMs: plan["Execution Time"],
+              sharedHit: plan.Plan["Shared Hit Blocks"],
+              sharedRead: plan.Plan["Shared Read Blocks"],
+              nodes: nodes.map((node) => ({
+                type: node["Node Type"],
+                relation: node["Relation Name"],
+                index: node["Index Name"],
+                rows: node["Actual Rows"],
+                loops: node["Actual Loops"],
+                removed: node["Rows Removed by Filter"] ?? 0,
+              })),
+            }),
+          );
+        }
+        // Exercise repeated parameterized polling as on a long-lived worker.
+        for (let repeat = 0; repeat < 10; repeat++)
+          expect(await pending.events()).toEqual(events.result);
+      } finally {
+        await pending.close();
+      }
+    });
+  });
+  test("event pages stay ordered, capped at 200 and isolated across populated workers", async () => {
+    await withTestDatabase(async (databaseUrl) => {
+      const first = new WorkerStore(databaseUrl, "batch-worker");
+      const other = new WorkerStore(databaseUrl, "batch-other");
+      const restarted = new WorkerStore(databaseUrl, first.workerId);
+      const ownedRuns = ["batch-a", "batch-c", "batch-e"];
+      const otherRuns = ["batch-b", "batch-d", "batch-f"];
+      const eventFor = (id: string, sequence: number): RunEvent => ({
+        runId: id,
+        sequence,
+        type: "log",
+        timestamp: "2026-01-01T00:00:00.000Z",
+        payload: { text: `${id}:${sequence}` },
+      });
+      const expected = (runs: string[]) =>
+        runs.flatMap((id) =>
+          Array.from({ length: 90 }, (_, n) => eventFor(id, n + 6)),
+        );
+      try {
+        await first.migrate();
+        for (const [owner, runs] of [
+          [first, ownedRuns],
+          [other, otherRuns],
+        ] as const) {
+          for (const id of runs)
+            await owner.receive({
+              ...command,
+              requestId: `submit-${id}`,
+              workerId: owner.workerId,
+              runId: id,
+              payload: {
+                ...command.payload,
+                run: { ...command.payload.run, id, workerId: owner.workerId },
+              },
+            });
+        }
+        await first.sql`INSERT INTO agent_flow_worker.events (run_id, sequence, event_key, event, acknowledged)
+          SELECT run_id, seq, 'log-' || seq,
+            jsonb_build_object('runId', run_id, 'sequence', seq, 'type', 'log',
+              'timestamp', '2026-01-01T00:00:00.000Z', 'payload', jsonb_build_object('text', run_id || ':' || seq)), seq <= 5
+          FROM agent_flow_worker.executions CROSS JOIN generate_series(95, 1, -1) AS seq
+          ORDER BY run_id DESC, seq DESC`;
+        const page = expected(ownedRuns).slice(0, 200);
+        const foreignPage = expected(otherRuns).slice(0, 200);
+        expect(await first.events()).toEqual(page);
+        expect(await other.events()).toEqual(foreignPage);
+        await other.acknowledge("batch-a", 95);
+        await first.acknowledge("batch-b", 95);
+        expect(await first.events()).toEqual(page);
+        expect(await other.events()).toEqual(foreignPage);
+        for (const id of ownedRuns) {
+          const last = page.filter((item) => item.runId === id).at(-1);
+          if (last) await first.acknowledge(id, last.sequence);
+        }
+        expect(await restarted.events()).toEqual(
+          expected(ownedRuns).slice(200),
+        );
+        expect(await other.events()).toEqual(foreignPage);
+        for (const id of ownedRuns) await restarted.acknowledge(id, 95);
+        expect(await restarted.events()).toEqual([]);
+        expect(await other.events()).toEqual(foreignPage);
+      } finally {
+        await Promise.all([first.close(), other.close(), restarted.close()]);
+      }
+    });
   });
   test("external operation intent is atomic and remains uncertain after restart", async () => {
     const intent = {

@@ -1,0 +1,4 @@
+CREATE INDEX "commands_unhandled" ON "agent_flow_worker"."commands" USING btree ("worker_id","created_at","request_id") WHERE "agent_flow_worker"."commands"."handled" = false;--> statement-breakpoint
+CREATE INDEX "events_unacknowledged" ON "agent_flow_worker"."events" USING btree ("run_id","sequence") WHERE "agent_flow_worker"."events"."acknowledged" = false;--> statement-breakpoint
+CREATE INDEX "executions_active" ON "agent_flow_worker"."executions" USING btree ("worker_id") WHERE "agent_flow_worker"."executions"."status" NOT IN ('succeeded', 'failed', 'cancelled');--> statement-breakpoint
+CREATE INDEX "resolutions_unconsumed" ON "agent_flow_worker"."resolutions" USING btree ("run_id","created_at","request_id") WHERE "agent_flow_worker"."resolutions"."consumed" = false;
