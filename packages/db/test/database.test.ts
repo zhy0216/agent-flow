@@ -44,7 +44,7 @@ suite("PostgreSQL business persistence and transactions", () => {
     const auth = await db.pair(pairing.code, "Worker");
     await db.register(auth.workerId, "connection", {
       name: "Worker",
-      capabilities: [WORKFLOW_VERSION],
+      capabilities: [WORKFLOW_VERSION, "repo:repo"],
       capacity: 1,
     });
     return { project, issue, ...auth };
@@ -103,7 +103,7 @@ suite("PostgreSQL business persistence and transactions", () => {
     const { project, issue, workerId } = await setup();
     const checks = [
       ["bun", "test", "--filter=it's a test"],
-      ["echo", "你好"],
+      ["git", "log", "--grep=你好"],
     ];
     const updated = await db.updateProject(project.id, {
       ...project,
@@ -282,6 +282,83 @@ suite("PostgreSQL business persistence and transactions", () => {
     await expect(db.deleteIssue(issue.id)).rejects.toMatchObject({
       code: "active_run",
     });
+  });
+  test("submission requires the exact repository capability and an available worker without partial writes", async () => {
+    const { issue, workerId } = await setup();
+    const input = {
+      issueId: issue.id,
+      workerId,
+      idempotencyKey: crypto.randomUUID(),
+    };
+    const counts = () => db.sql`SELECT
+      (SELECT count(*)::int FROM agent_flow.runs) AS runs,
+      (SELECT count(*)::int FROM agent_flow.outbox) AS outbox`;
+    const before = await counts();
+    for (const capabilities of [
+      [WORKFLOW_VERSION],
+      [WORKFLOW_VERSION, "repo:other", "repo:repo-extra"],
+    ]) {
+      await db.register(workerId, "connection", {
+        name: "Worker",
+        capabilities,
+        capacity: 1,
+      });
+      await expect(db.submitRun(input)).rejects.toMatchObject({
+        status: 409,
+        code: "worker_repo",
+        message: "Repository 'repo' is not configured on this worker",
+      });
+      expect(await counts()).toEqual(before);
+      expect(await db.issue(issue.id)).toEqual(issue);
+    }
+    const capabilities = [WORKFLOW_VERSION, "repo:other", "repo:repo"];
+    await db.register(workerId, "connection", {
+      name: "Worker",
+      capabilities,
+      capacity: 0,
+    });
+    await expect(db.submitRun(input)).rejects.toMatchObject({
+      code: "worker_busy",
+    });
+    await db.heartbeat(workerId, "connection", 1, "local-run");
+    await expect(db.submitRun(input)).rejects.toMatchObject({
+      code: "worker_busy",
+    });
+    await db.disconnect(workerId, "connection");
+    await expect(db.submitRun(input)).rejects.toMatchObject({
+      code: "worker_offline",
+    });
+    expect(await counts()).toEqual(before);
+    expect(await db.issue(issue.id)).toEqual(issue);
+    await db.register(workerId, "connection", {
+      name: "Worker",
+      capabilities,
+      capacity: 1,
+    });
+    const run = await db.submitRun(input);
+    expect(await db.runs(issue.id)).toEqual([run]);
+    expect(await db.pendingCommands(workerId)).toHaveLength(1);
+    const after = await counts();
+    // An accepted key keeps its result even after the worker loses capabilities,
+    // becomes busy/offline, or the project is configured for a different repo.
+    const project = await db.project(issue.projectId);
+    await db.updateProject(project.id, { ...project, repoKey: "changed" });
+    await db.register(workerId, "connection", {
+      name: "Worker",
+      capabilities: [],
+      capacity: 0,
+      currentRunId: run.id,
+    });
+    await db.disconnect(workerId, "connection");
+    expect(await db.submitRun(input)).toEqual(run);
+    expect(await counts()).toEqual(after);
+    const other = await db.createIssue({
+      projectId: project.id,
+      title: "Other",
+    });
+    await expect(
+      db.submitRun({ ...input, issueId: other.id }),
+    ).rejects.toMatchObject({ code: "idempotency_conflict" });
   });
   test("events enforce ordering, reject changed duplicates and atomically project state", async () => {
     const { issue, workerId } = await setup();
@@ -482,7 +559,7 @@ suite("PostgreSQL business persistence and transactions", () => {
     expect((await db.issue(issue.id)).status).toBe("todo");
     await db.register(workerId, "replacement", {
       name: "Worker",
-      capabilities: [WORKFLOW_VERSION],
+      capabilities: [WORKFLOW_VERSION, "repo:repo"],
       capacity: 1,
     });
     const retried = await db.retry(run.id, crypto.randomUUID());
@@ -532,7 +609,7 @@ suite("PostgreSQL business persistence and transactions", () => {
     });
     await db.register(workerId, "new-connection", {
       name: "Worker",
-      capabilities: [WORKFLOW_VERSION],
+      capabilities: [WORKFLOW_VERSION, "repo:repo"],
       capacity: 1,
     });
     await db.heartbeat(workerId, "connection", 0, "foreign-run");

@@ -11,7 +11,7 @@ import { createMemoryHistory, RouterProvider } from "@tanstack/react-router";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { acceptsEvent, healthQueryOptions } from "../src/api";
-import { parseCheckCommands } from "../src/forms";
+import { formatCommands, parseCheckCommands } from "../src/forms";
 import { createAppRouter } from "../src/router";
 
 const timestamp = "2026-09-05T08:00:00.000Z";
@@ -43,7 +43,7 @@ function fixture() {
       id: "worker-1",
       name: "本地 Mac",
       online: true,
-      capabilities: ["codex", "herdr"],
+      capabilities: ["issue-agent/v1", "codex", "herdr", "repo:website"],
       capacity: 1,
       currentRunId: null,
       lastHeartbeat: timestamp,
@@ -408,6 +408,165 @@ test("project and issue forms preserve input, submit CRUD and persist filters in
   }
 });
 
+test("project forms reject invalid argv before HTTP and preserve special argv when editing", async () => {
+  const state = fixture();
+  const app = await mount(state, "/projects");
+  try {
+    await click(button(app.container, "＋ 新建项目"));
+    await input(field(app.container, "项目名称"), "检查参数");
+    await input(field(app.container, "仓库标识"), "repo");
+    for (const [text, message] of [
+      ["npm test", "program must be bun or git"],
+      ['"" test', "program must be bun or git"],
+      ["bun a\0b", "NUL"],
+      [String.raw`bun "\u0000"`, "NUL"],
+      ["bun test | git status", "不支持管道"],
+      ["bun $(id)", "不支持管道"],
+      ['bun "unfinished', "未闭合"],
+      [`bun ${"x".repeat(1001)}`, "at most 1000"],
+      [Array.from({ length: 21 }, () => "bun test").join("\n"), "at most 20"],
+      [`bun ${Array.from({ length: 50 }, () => '""').join(" ")}`, "1 to 50"],
+    ]) {
+      await input(field(app.container, "完成后检查"), text as string);
+      await submit(app.container);
+      expect(
+        app.container.querySelector('[role="alert"]')?.textContent,
+      ).toContain(message as string);
+      expect(state.calls.filter((call) => call.method === "POST")).toHaveLength(
+        0,
+      );
+      expect(state.projects).toHaveLength(1);
+    }
+    const checks = [
+      [
+        "bun",
+        "test",
+        "",
+        'a"b',
+        "it's",
+        "C:\\new\\test",
+        "line\nbreak\r\n",
+        "$(id)",
+        "`id`",
+        "$HOME",
+        "|",
+      ],
+      ["git", "diff", "--check"],
+    ];
+    await input(field(app.container, "完成后检查"), formatCommands(checks));
+    await submit(app.container);
+    expect(state.projects.at(-1)?.checks).toEqual(checks);
+    const card = [...app.container.querySelectorAll(".project-card")].find(
+      (card) => card.textContent?.includes("检查参数"),
+    );
+    if (!card) throw new Error("Missing created project");
+    await click(button(card, "编辑"));
+    expect(field(app.container, "完成后检查").value).toBe(
+      formatCommands(checks),
+    );
+    await input(field(app.container, "项目名称"), "改名保留参数");
+    await submit(app.container);
+    expect(
+      state.calls.find((call) => call.method === "PATCH")?.body.checks,
+    ).toEqual(checks);
+    expect(state.projects.at(-1)?.checks).toEqual(checks);
+  } finally {
+    await app.dispose();
+  }
+});
+
+test("execution dialog selects only a matching available worker and rechecks live capability changes", async () => {
+  const state = fixture();
+  const available = state.workers[0];
+  if (!available) throw new Error("Missing worker");
+  const unavailable = [
+    {
+      id: "other-repo",
+      capabilities: ["issue-agent/v1", "repo:website-other"],
+      reason: "未配置仓库 website",
+    },
+    { id: "offline", online: false, reason: "离线" },
+    { id: "no-capacity", capacity: 0, reason: "忙碌（无空闲执行槽位）" },
+    {
+      id: "current-run",
+      currentRunId: "another-run",
+      reason: "忙碌（正在执行任务）",
+    },
+    {
+      id: "no-workflow",
+      capabilities: ["repo:website"],
+      reason: "不支持当前执行流程",
+    },
+  ];
+  state.workers.unshift(
+    ...unavailable.map(({ reason: _reason, ...patch }) => ({
+      ...available,
+      ...patch,
+    })),
+  );
+  const app = await mount(state, "/issues/issue-1");
+  try {
+    await click(button(app.container, "▷ 发起执行"));
+    expect(field(app.container, "执行 Worker").value).toBe(available.id);
+    for (const { id, reason } of unavailable) {
+      const option = app.container.querySelector<HTMLOptionElement>(
+        `option[value="${id}"]`,
+      );
+      expect(option?.disabled).toBe(true);
+      expect(option?.textContent).toContain(reason);
+    }
+    expect(button(app.container, "开始执行").disabled).toBe(false);
+    // A disabled option cannot be selected in a browser; also guard synthetic submits.
+    await input(field(app.container, "执行 Worker"), "other-repo");
+    await submit(app.container);
+    expect(button(app.container, "开始执行").disabled).toBe(true);
+    expect(state.runs).toHaveLength(0);
+    await input(field(app.container, "执行 Worker"), available.id);
+    await act(async () => {
+      app.client.setQueryData(
+        ["workers"],
+        state.workers.map((worker) => ({
+          ...worker,
+          capabilities: ["issue-agent/v1", "repo:elsewhere"],
+        })),
+      );
+    });
+    await flush();
+    expect(button(app.container, "开始执行").disabled).toBe(true);
+    expect(app.container.textContent).toContain("暂无可用 Worker");
+    await submit(app.container);
+    expect(
+      state.calls.filter(
+        (call) => call.path === "/api/runs" && call.method === "POST",
+      ),
+    ).toHaveLength(0);
+    await act(async () => {
+      app.client.setQueryData(["workers"], state.workers);
+    });
+    await flush();
+    await submit(app.container);
+    expect(state.runs[0]?.workerId).toBe(available.id);
+  } finally {
+    await app.dispose();
+  }
+});
+
+test("execution dialog cannot submit before the project repository is known", async () => {
+  const state = fixture();
+  state.projects.length = 0;
+  const app = await mount(state, "/issues/issue-1");
+  try {
+    await click(button(app.container, "▷ 发起执行"));
+    expect(field(app.container, "执行 Worker").value).toBe("");
+    expect(app.container.textContent).toContain("项目仓库信息尚未就绪");
+    expect(button(app.container, "开始执行").disabled).toBe(true);
+    await submit(app.container);
+    expect(state.runs).toHaveLength(0);
+  } finally {
+    await app.dispose();
+  }
+});
+
 test("ambiguous submission retries reuse the idempotency key, then cancel and retry preserve history", async () => {
   const state = fixture();
   state.failSubmit();
@@ -416,6 +575,21 @@ test("ambiguous submission retries reuse the idempotency key, then cancel and re
     await click(button(app.container, "▷ 发起执行"));
     await submit(app.container);
     expect(app.container.textContent).toContain("连接中断，请重试");
+    await act(async () => {
+      app.client.setQueryData(
+        ["workers"],
+        state.workers.map((worker) => ({
+          ...worker,
+          online: false,
+          capacity: 0,
+          currentRunId: "run-1",
+          capabilities: [],
+        })),
+      );
+      app.client.setQueryData(["runs", "issue-1"], [newRun()]);
+    });
+    await flush();
+    expect(button(app.container, "重试提交").disabled).toBe(false);
     await submit(app.container);
     const submissions = state.calls.filter(
       (call) => call.path === "/api/runs" && call.method === "POST",

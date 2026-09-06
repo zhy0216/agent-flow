@@ -5,6 +5,7 @@ import {
   type Issue,
   issueStatuses,
   type Project,
+  parseChecks,
   parseIssue,
   parseProject,
   priorities,
@@ -12,52 +13,63 @@ import {
 import { useState } from "react";
 import { ErrorNotice, Field, issueLabels, priorityLabels } from "./components";
 
-/** Parse argv only; operators and substitutions never become shell commands. */
+/** Unquoted newlines separate commands. Single quotes are literal; double
+ * quotes support JSON escapes. Operators and substitutions never run a shell. */
 export function parseCheckCommands(text: string): string[][] {
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const argv: string[] = [];
-      let current = "";
-      let quote = "";
-      let escaped = false;
-      let started = false;
-      for (const character of line) {
-        if (escaped) {
-          current += character;
-          escaped = false;
-          started = true;
-        } else if (character === "\\" && quote !== "'") escaped = true;
-        else if (quote) {
-          if (character === quote) quote = "";
-          else current += character;
-        } else if (character === "'" || character === '"') {
-          quote = character;
-          started = true;
-        } else if (/\s/.test(character)) {
-          if (started) {
-            argv.push(current);
-            current = "";
-            started = false;
-          }
-        } else if ("|;&<>`".includes(character) || character === "$")
+  const commands: string[][] = [];
+  let argv: string[] = [];
+  let current = "";
+  let quote = "";
+  let started = false;
+  const finishArgument = () => {
+    if (started) argv.push(current);
+    current = "";
+    started = false;
+  };
+  const finishCommand = () => {
+    finishArgument();
+    if (argv.length) commands.push(argv);
+    argv = [];
+  };
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index] as string;
+    if (quote) {
+      if (character === quote) quote = "";
+      else if (character === "\\" && quote === '"') {
+        const end = index + (text[index + 1] === "u" ? 6 : 2);
+        try {
+          current += JSON.parse(`"${text.slice(index, end)}"`);
+        } catch {
           throw new Error(
-            "检查命令使用程序与参数，请分行填写，不支持管道或变量展开。",
+            "检查命令的双引号参数包含无效转义，请使用 JSON 转义或单引号原文。",
           );
-        else {
-          current += character;
-          started = true;
         }
-      }
-      if (quote || escaped)
+        index = end - 1;
+      } else current += character;
+    } else if (character === "\\") {
+      if (++index === text.length)
         throw new Error("检查命令包含未闭合的引号或转义符。");
-      if (started) argv.push(current);
-      return argv;
-    });
+      current += text[index];
+      started = true;
+    } else if (character === "'" || character === '"') {
+      quote = character;
+      started = true;
+    } else if (character === "\n" || character === "\r") finishCommand();
+    else if (/\s/.test(character)) finishArgument();
+    else if ("|;&<>`$".includes(character))
+      throw new Error(
+        "检查命令使用程序与参数，请分行填写，不支持管道或变量展开。",
+      );
+    else {
+      current += character;
+      started = true;
+    }
+  }
+  if (quote) throw new Error("检查命令包含未闭合的引号或转义符。");
+  finishCommand();
+  return parseChecks(commands);
 }
-function formatCommands(checks: string[][]) {
+export function formatCommands(checks: string[][]) {
   return checks
     .map((argv) =>
       argv
@@ -128,7 +140,9 @@ export function ProjectForm({
       </Field>
       <Field
         label="完成后检查"
-        hint="每行一条命令，例如 bun run test；参数可使用引号。留空则只收集执行结果。"
+        hint={
+          '每行一条 bun 或 git 命令；单引号保留原文，双引号支持 JSON 转义（如 \\n），空参数写 ""。留空则只收集执行结果。'
+        }
       >
         <textarea
           rows={3}

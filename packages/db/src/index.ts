@@ -697,7 +697,13 @@ export class Database {
           "worker_capability",
           "Worker does not support this workflow version",
         );
-      if (worker.capacity < 1)
+      if (!worker.capabilities.includes(`repo:${project.repoKey}`))
+        throw new DomainError(
+          409,
+          "worker_repo",
+          `Repository '${project.repoKey}' is not configured on this worker`,
+        );
+      if (worker.capacity < 1 || worker.currentRunId)
         throw new DomainError(
           409,
           "worker_busy",

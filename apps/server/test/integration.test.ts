@@ -72,14 +72,19 @@ class WorkerClient {
       check();
     });
   }
-  async register() {
+  async register(
+    capabilities = [WORKFLOW_VERSION, "repo:demo"],
+    capacity = 1,
+    currentRunId: string | null = null,
+  ) {
     await this.opened();
     this.send({
       type: "worker.register",
       payload: {
         name: "Test worker",
-        capabilities: [WORKFLOW_VERSION],
-        capacity: 1,
+        capabilities,
+        capacity,
+        currentRunId,
       },
     });
     await this.next("worker.ready");
@@ -191,6 +196,167 @@ suite("Zebra listener control channel and workspace API", () => {
         .status,
     ).toBe(204);
     expect((await fetch(`${base}/api/issues/${issue.id}`)).status).toBe(404);
+  });
+  test("project HTTP saves share argv validation and invalid creates or edits leave storage unchanged", async () => {
+    const checks = [
+      [
+        "bun",
+        "test",
+        "",
+        " ",
+        'a"b',
+        "it's",
+        "C:\\new\\test",
+        "line\nbreak\r\n",
+        "$(id)",
+        "`id`",
+        "$HOME",
+        "|",
+      ],
+      ["git", "diff", "--check"],
+    ];
+    const project = await api<Project>("/api/projects", "POST", {
+      name: "Argv",
+      repoKey: "demo",
+      checks,
+    });
+    expect(project.checks).toEqual(checks);
+    expect(
+      (await api<Project[]>("/api/projects")).find(
+        (value) => value.id === project.id,
+      )?.checks,
+    ).toEqual(checks);
+    const before = await db.projects();
+    for (const [invalid, message] of [
+      [null, "array"],
+      ["bun test", "array"],
+      [["bun test"], "argv array"],
+      [[[]], "argv array"],
+      [[["npm", "test"]], "program must be bun or git"],
+      [[[""]], "program must be bun or git"],
+      [[["/usr/bin/git"]], "program must be bun or git"],
+      [[["bun", 1]], "string"],
+      [[["bun\0"]], "NUL"],
+      [[["bun", "a\0b"]], "NUL"],
+      [[Array.from({ length: 51 }, () => "bun")], "1 to 50"],
+      [Array.from({ length: 21 }, () => ["git"]), "at most 20"],
+      [[["bun", "x".repeat(1001)]], "at most 1000"],
+    ]) {
+      for (const method of ["POST", "PATCH"]) {
+        const response = await fetch(
+          `${base}/api/projects${method === "PATCH" ? `/${project.id}` : ""}`,
+          {
+            method,
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              name: "Must not save",
+              repoKey: "demo",
+              checks: invalid,
+            }),
+          },
+        );
+        expect(response.status).toBe(400);
+        expect(await response.json()).toMatchObject({
+          error: {
+            code: "invalid_input",
+            message: expect.stringContaining(String(message)),
+          },
+        });
+        expect(await db.projects()).toEqual(before);
+      }
+    }
+    const edited = await api<Project>(`/api/projects/${project.id}`, "PATCH", {
+      name: "Argv edited",
+      checks,
+    });
+    expect(edited).toEqual({ ...project, name: "Argv edited" });
+    expect(await api<Project>(`/api/projects/${project.id}`)).toEqual(edited);
+  });
+  test("HTTP rejects repository mismatches before run/outbox writes and preserves accepted idempotent results", async () => {
+    const pairing = await api<PairingCode>("/api/workers/pairing", "POST", {});
+    const auth = await api<PairingResult>("/api/workers/pair", "POST", {
+      code: pairing.code,
+      name: "Repo worker",
+    });
+    const client = new WorkerClient(
+      auth.workerId,
+      `${base.replace("http:", "ws:")}/api/workers/connect`,
+      auth.token,
+    );
+    clients.push(client);
+    const project = await api<Project>("/api/projects", "POST", {
+      name: "Repo capability",
+      repoKey: "target",
+    });
+    const issue = await api<Issue>("/api/issues", "POST", {
+      projectId: project.id,
+      title: "Target task",
+    });
+    const input = {
+      issueId: issue.id,
+      workerId: auth.workerId,
+      idempotencyKey: crypto.randomUUID(),
+    };
+    const counts = () => db.sql`SELECT
+      (SELECT count(*)::int FROM agent_flow.runs) AS runs,
+      (SELECT count(*)::int FROM agent_flow.outbox) AS outbox`;
+    const before = await counts();
+    for (const capabilities of [
+      [WORKFLOW_VERSION],
+      [WORKFLOW_VERSION, "repo:other", "repo:target-suffix"],
+    ]) {
+      await client.register(capabilities);
+      const response = await fetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      expect(response.status).toBe(409);
+      expect(await response.json()).toMatchObject({
+        error: {
+          code: "worker_repo",
+          message: "Repository 'target' is not configured on this worker",
+        },
+      });
+      expect(await counts()).toEqual(before);
+      expect(await db.issue(issue.id)).toEqual(issue);
+      expect(await db.pendingCommands(auth.workerId)).toEqual([]);
+    }
+    const capabilities = [WORKFLOW_VERSION, "repo:target"];
+    for (const [capacity, currentRunId] of [
+      [0, null],
+      [1, "local-run"],
+    ] as const) {
+      await client.register(capabilities, capacity, currentRunId);
+      await expect(api("/api/runs", "POST", input)).rejects.toThrow(
+        '409 {"error":{"code":"worker_busy"',
+      );
+      expect(await counts()).toEqual(before);
+    }
+    await client.register(capabilities);
+    const run = await api<Run>("/api/runs", "POST", input);
+    const command = await client.next("run.submit");
+    expect(command.payload).toMatchObject({
+      run: { id: run.id },
+      project: { repoKey: "target" },
+    });
+    const after = await counts();
+    await client.register([WORKFLOW_VERSION, "repo:other"], 0, run.id);
+    expect(await api<Run>("/api/runs", "POST", input)).toEqual(run);
+    expect(await counts()).toEqual(after);
+    client.close();
+    const deadline = Date.now() + 4000;
+    while ((await db.worker(auth.workerId)).online && Date.now() < deadline)
+      await Bun.sleep(10);
+    expect((await db.worker(auth.workerId)).online).toBe(false);
+    expect(await api<Run>("/api/runs", "POST", input)).toEqual(run);
+    await expect(
+      api("/api/runs", "POST", {
+        ...input,
+        idempotencyKey: crypto.randomUUID(),
+      }),
+    ).rejects.toThrow('409 {"error":{"code":"worker_offline"');
+    expect(await counts()).toEqual(after);
   });
   test("real WS upgrade authenticates before registration; reconnect replays unacked command and deduplicates events", async () => {
     const pairing = await api<PairingCode>("/api/workers/pairing", "POST", {});
@@ -370,7 +536,7 @@ suite("Zebra listener control channel and workspace API", () => {
       auth.token,
     );
     clients.push(original);
-    await original.register();
+    await original.register([WORKFLOW_VERSION, "repo:restart"]);
     const project = await api<Project>("/api/projects", "POST", {
       name: "Restart",
       repoKey: "restart",
@@ -401,7 +567,7 @@ suite("Zebra listener control channel and workspace API", () => {
       auth.token,
     );
     clients.push(recovered);
-    await recovered.register();
+    await recovered.register([WORKFLOW_VERSION, "repo:restart"]);
     expect((await recovered.next("run.submit")).requestId).toBe(
       first.requestId,
     );

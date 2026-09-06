@@ -7,6 +7,8 @@ import {
   type Project,
   priorities,
   type Run,
+  type SubmitRun,
+  type Worker,
 } from "@agent-flow/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
@@ -464,6 +466,18 @@ export function IssuesPage({
   );
 }
 
+function workerUnavailableReason(worker: Worker, project?: Project) {
+  if (!project) return "项目仓库信息尚未就绪";
+  if (!worker.online) return "离线";
+  if (!worker.capabilities.includes("issue-agent/v1"))
+    return "不支持当前执行流程";
+  if (!worker.capabilities.includes(`repo:${project.repoKey}`))
+    return `未配置仓库 ${project.repoKey}`;
+  if (worker.currentRunId) return "忙碌（正在执行任务）";
+  if (worker.capacity < 1) return "忙碌（无空闲执行槽位）";
+  return undefined;
+}
+
 export function IssuePage({ id }: { id: string }) {
   const issue = useQuery(issueQuery(id));
   const projects = useQuery(projectsQuery);
@@ -498,14 +512,10 @@ export function IssuePage({ id }: { id: string }) {
     },
   });
   const start = useMutation({
-    mutationFn: () =>
+    mutationFn: (value: SubmitRun) =>
       request<Run>("/runs", {
         method: "POST",
-        body: jsonBody({
-          issueId: id,
-          workerId,
-          idempotencyKey: submissionKey,
-        }),
+        body: jsonBody(value),
       }),
     onSuccess: (run) => {
       void client.invalidateQueries({ queryKey: ["runs"] });
@@ -522,6 +532,30 @@ export function IssuePage({ id }: { id: string }) {
   const project = projects.data?.find(
     (value) => value.id === issue.data?.projectId,
   );
+  const workerChoices = (workers.data ?? []).map((worker) => ({
+    worker,
+    reason: workerUnavailableReason(worker, project),
+  }));
+  const selectedWorker = workerChoices.find(
+    ({ worker }) => worker.id === workerId,
+  );
+  // The first request may have committed before its response was lost. Allow
+  // only the same request/key to recover its result despite newer worker state.
+  const retryingSubmission =
+    start.isError &&
+    start.variables?.issueId === id &&
+    start.variables.workerId === workerId &&
+    start.variables.idempotencyKey === submissionKey;
+  const canStart =
+    !start.isPending &&
+    (retryingSubmission ||
+      (!!selectedWorker &&
+        !selectedWorker.reason &&
+        !activeRun &&
+        !runs.isPending &&
+        !runs.isError &&
+        !projects.isError &&
+        !workers.isError));
   return (
     <Page
       title={issue.data?.title ?? "任务详情"}
@@ -546,12 +580,7 @@ export function IssuePage({ id }: { id: string }) {
               onClick={() => {
                 setSubmissionKey(crypto.randomUUID());
                 setWorkerId(
-                  workers.data?.find(
-                    (worker) =>
-                      worker.online &&
-                      worker.capacity > 0 &&
-                      !worker.currentRunId,
-                  )?.id ?? "",
+                  workerChoices.find(({ reason }) => !reason)?.worker.id ?? "",
                 );
                 start.reset();
                 setStarting(true);
@@ -715,10 +744,15 @@ export function IssuePage({ id }: { id: string }) {
           <form
             onSubmit={(event) => {
               event.preventDefault();
-              start.mutate();
+              if (canStart)
+                start.mutate({
+                  issueId: id,
+                  workerId,
+                  idempotencyKey: submissionKey,
+                });
             }}
           >
-            <Field label="执行 Worker">
+            <Field label="执行 Worker" hint={selectedWorker?.reason}>
               <select
                 required
                 value={workerId}
@@ -727,32 +761,18 @@ export function IssuePage({ id }: { id: string }) {
                   setSubmissionKey(crypto.randomUUID());
                 }}
               >
-                <option value="">选择在线且空闲的 Worker</option>
-                {workers.data?.map((worker) => (
-                  <option
-                    key={worker.id}
-                    value={worker.id}
-                    disabled={
-                      !worker.online ||
-                      worker.capacity < 1 ||
-                      !!worker.currentRunId
-                    }
-                  >
-                    {worker.name} ·{" "}
-                    {!worker.online
-                      ? "离线"
-                      : worker.currentRunId || worker.capacity < 1
-                        ? "忙碌"
-                        : "可执行"}
+                <option value="">选择已配置此仓库且在线空闲的 Worker</option>
+                {workerChoices.map(({ worker, reason }) => (
+                  <option key={worker.id} value={worker.id} disabled={!!reason}>
+                    {worker.name} · {reason ?? "可执行"}
                   </option>
                 ))}
               </select>
             </Field>
-            <ErrorNotice error={workers.error || start.error} />
-            {!workers.data?.some(
-              (worker) =>
-                worker.online && worker.capacity > 0 && !worker.currentRunId,
-            ) && (
+            <ErrorNotice
+              error={projects.error || workers.error || start.error}
+            />
+            {!workerChoices.some(({ reason }) => !reason) && (
               <p className="field-hint">
                 暂无可用 Worker。
                 <Link className="inline-link" to="/workers">
@@ -771,9 +791,13 @@ export function IssuePage({ id }: { id: string }) {
               <button
                 type="submit"
                 className="button primary"
-                disabled={!workerId || start.isPending}
+                disabled={!canStart}
               >
-                {start.isPending ? "提交中…" : "开始执行"}
+                {start.isPending
+                  ? "提交中…"
+                  : retryingSubmission
+                    ? "重试提交"
+                    : "开始执行"}
               </button>
             </div>
           </form>

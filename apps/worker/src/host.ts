@@ -1,6 +1,10 @@
 import { mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import type { Artifact, WorkerCommand } from "@agent-flow/contracts";
+import {
+  type Artifact,
+  parseChecks,
+  type WorkerCommand,
+} from "@agent-flow/contracts";
 import {
   createHerdrAdapter,
   type HerdrAdapter,
@@ -143,12 +147,11 @@ export async function startWorker(
         throw new Error(
           `Repository '${project.repoKey}' is not configured on this worker.`,
         );
-      const checks: { command: "bun" | "git"; args: string[] }[] =
-        project.checks.map(([command, ...args]) => {
-          if (command !== "bun" && command !== "git")
-            throw new Error("Checks must use bun or git with explicit argv.");
-          return { command, args };
-        });
+      // Revalidate persisted submissions, including snapshots saved by older servers.
+      const checks = parseChecks(project.checks).map(([command, ...args]) => ({
+        command,
+        args,
+      }));
       return {
         runId,
         repoRoot,

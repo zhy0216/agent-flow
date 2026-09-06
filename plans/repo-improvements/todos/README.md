@@ -17,7 +17,7 @@ default_agent: codex
 | [01-database-lock-order.md](done/01-database-lock-order.md) | P1 | hard | codex（继承默认） | gpt-6-astra / max | 已完成。修复已复现的提交与事件死锁，保留事务不变量。 |
 | [02-worker-identity.md](done/02-worker-identity.md) | P1 | medium | codex（继承默认） | gpt-6-astra / xhigh | 已完成：原子配对，验证身份文件和 repo 字典。 |
 | [03-command-lifecycle.md](done/03-command-lifecycle.md) | P1 | hard | codex（继承默认） | gpt-6-astra / max | 已完成：限制输出内存，使超时涵盖自有后代和管道。 |
-| [04-submission-validation.md](04-submission-validation.md) | P1 | hard | codex（继承默认） | gpt-6-astra / max | 统一检查 argv，提交前匹配 worker 的目标仓库。 |
+| [04-submission-validation.md](done/04-submission-validation.md) | P1 | hard | codex（继承默认） | gpt-6-astra / max | 已完成：统一检查 argv，提交前匹配 worker 的目标仓库。 |
 | [05-realtime-logs.md](05-realtime-logs.md) | P1 | hard | codex（继承默认） | gpt-6-astra / max | 跨页跟随、有界历史窗口与通知刷新控制。 |
 | [06-worker-query-indexes.md](done/06-worker-query-indexes.md) | P2 | hard | codex（继承默认） | gpt-6-astra / max | 已完成：待处理部分索引、增量迁移和查询计划证据。 |
 | [07-dependency-audit.md](done/07-dependency-audit.md) | P2 | medium | codex（继承默认） | gpt-6-astra / xhigh | 已完成：处理 esbuild 告警并建立可重复审计 gate。 |
@@ -29,7 +29,7 @@ default_agent: codex
 1. `done/01-database-lock-order.md` — 已完成；依赖：无。
 2. [02-worker-identity.md](done/02-worker-identity.md) — 已完成；依赖：无。
 3. [03-command-lifecycle.md](done/03-command-lifecycle.md) — 已完成；依赖：无。
-4. `04-submission-validation.md` — 依赖 01-database-lock-order.md。
+4. [04-submission-validation.md](done/04-submission-validation.md) — 已完成；依赖 01-database-lock-order.md。
 5. `05-realtime-logs.md` — 依赖 04-submission-validation.md。
 6. `done/06-worker-query-indexes.md` — 已完成；依赖：无。
 7. [07-dependency-audit.md](done/07-dependency-audit.md) — 已完成；依赖：无。

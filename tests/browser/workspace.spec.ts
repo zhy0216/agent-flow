@@ -50,8 +50,12 @@ async function seed(request: APIRequestContext, title: string) {
   });
   return { project, issue };
 }
-async function createWorker(request: APIRequestContext, name: string) {
-  return fixture<{ workerId: string }>(request, "/worker", { name });
+async function createWorker(
+  request: APIRequestContext,
+  name: string,
+  repoKey = "browser-fixture",
+) {
+  return fixture<{ workerId: string }>(request, "/worker", { name, repoKey });
 }
 async function emit(
   request: APIRequestContext,
@@ -72,6 +76,82 @@ async function start(page: Page, issueId: string, workerId: string) {
   if (!runId) throw new Error("Run ID missing from route");
   return runId;
 }
+
+test("check command text rejects unsupported programs and preserves special argv through create, edit and reload", async ({
+  page,
+  request,
+}) => {
+  await page.goto("/projects");
+  await page.getByRole("button", { name: "＋ 新建项目", exact: true }).click();
+  await page.getByLabel("项目名称").fill("参数往返项目");
+  await page.getByLabel("仓库标识").fill("browser-fixture");
+  await page.getByLabel("完成后检查").fill("npm test");
+  await page.getByRole("button", { name: "创建项目", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "program must be bun or git",
+  );
+  expect(
+    (await api<Project[]>(request, "/projects")).some(
+      (project) => project.name === "参数往返项目",
+    ),
+  ).toBe(false);
+  const text = String.raw`bun test "" "a\"b" "it's" "C:\\new\\test" "line\nbreak\r\n" "$(id)" "$HOME" "|"`;
+  const checks = [
+    [
+      "bun",
+      "test",
+      "",
+      'a"b',
+      "it's",
+      "C:\\new\\test",
+      "line\nbreak\r\n",
+      "$(id)",
+      "$HOME",
+      "|",
+    ],
+  ];
+  await page.getByLabel("完成后检查").fill(text);
+  await page.getByRole("button", { name: "创建项目", exact: true }).click();
+  await expect(page.getByRole("dialog")).toBeHidden();
+  await page.reload();
+  const card = page
+    .locator(".project-card")
+    .filter({ hasText: "参数往返项目" });
+  await card.getByRole("button", { name: "编辑", exact: true }).click();
+  await expect(page.getByLabel("完成后检查")).toHaveValue(text);
+  await page.getByRole("button", { name: "保存项目", exact: true }).click();
+  await expect(page.getByRole("dialog")).toBeHidden();
+  const project = (await api<Project[]>(request, "/projects")).find(
+    (project) => project.name === "参数往返项目",
+  );
+  expect(project?.checks).toEqual(checks);
+});
+
+test("execution dialog disables a worker for another repository and submits to the matching worker", async ({
+  page,
+  request,
+}) => {
+  const { issue } = await seed(request, "匹配仓库验收");
+  const wrong = await createWorker(request, "其他仓库 Worker", "elsewhere");
+  const matching = await createWorker(request, "匹配仓库 Worker");
+  await page.goto(`/issues/${issue.id}`);
+  await page.getByRole("button", { name: "▷ 发起执行", exact: true }).click();
+  const select = page.getByLabel("执行 Worker", { exact: true });
+  const option = select.locator(`option[value="${wrong.workerId}"]`);
+  await expect(option).toBeDisabled();
+  await expect(option).toHaveText(
+    "其他仓库 Worker · 未配置仓库 browser-fixture",
+  );
+  await expect(select).toHaveValue(matching.workerId);
+  await page.getByRole("button", { name: "开始执行", exact: true }).click();
+  await page.waitForURL(/\/runs\/run_/);
+  const runs = await api<Run[]>(request, `/issues/${issue.id}/runs`);
+  expect(runs).toHaveLength(1);
+  expect(runs[0]?.workerId).toBe(matching.workerId);
+  expect(
+    await fixture(request, "/commands", { workerId: wrong.workerId }),
+  ).toEqual([]);
+});
 
 test("project and issue CRUD persist through reload; filters use URL; dialogs preserve keyboard focus", async ({
   page,

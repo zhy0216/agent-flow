@@ -51,6 +51,7 @@ class FixtureWorker {
     readonly id: string,
     readonly token: string,
     readonly name: string,
+    readonly repoKey: string,
   ) {}
   send(message: Omit<WorkerMessage, "version" | "workerId" | "requestId">) {
     this.socket?.send(
@@ -116,7 +117,12 @@ class FixtureWorker {
           type: "worker.register",
           payload: {
             name: this.name,
-            capabilities: ["issue-agent/v1", "codex", "herdr"],
+            capabilities: [
+              "issue-agent/v1",
+              "codex",
+              "herdr",
+              `repo:${this.repoKey}`,
+            ],
             capacity: 1,
             currentRunId: this.currentRunId,
           },
@@ -175,7 +181,12 @@ const fixture = Bun.serve({
           "/workers/pair",
           { code: code.code, name },
         );
-        const worker = new FixtureWorker(auth.workerId, auth.token, name);
+        const worker = new FixtureWorker(
+          auth.workerId,
+          auth.token,
+          name,
+          String(body.repoKey ?? "browser-fixture"),
+        );
         workers.set(worker.id, worker);
         await worker.connect();
         return Response.json({ workerId: worker.id });

@@ -213,6 +213,33 @@ export function integer(
     throw new ValidationError(`Invalid ${name}`);
   return value;
 }
+export type CheckArgv = [command: "bun" | "git", ...args: string[]];
+
+/** Validate executable argv, without trimming arguments or interpreting a shell. */
+export function parseChecks(value: unknown): CheckArgv[] {
+  if (!Array.isArray(value) || value.length > 20)
+    throw new ValidationError(
+      "checks must be an array of at most 20 command argv arrays",
+    );
+  return Array.from(value, (argv, index): CheckArgv => {
+    if (!Array.isArray(argv) || argv.length < 1 || argv.length > 50)
+      throw new ValidationError(
+        `Check ${index + 1} must be an argv array of 1 to 50 strings`,
+      );
+    const [command, ...args] = Array.from(argv, (arg, position) => {
+      const name = `Check ${index + 1} argument ${position + 1}`;
+      const value = string(arg, name, 1000, true);
+      if (value.includes("\0"))
+        throw new ValidationError(`${name} must not contain NUL`);
+      return value;
+    });
+    if (command !== "bun" && command !== "git")
+      throw new ValidationError(
+        `Check ${index + 1} program must be bun or git with explicit argv`,
+      );
+    return [command, ...args];
+  });
+}
 export function parseProject(value: unknown): CreateProject {
   const v = object(value);
   const name = string(v.name, "name", 200).trim();
@@ -223,19 +250,12 @@ export function parseProject(value: unknown): CreateProject {
     );
   if (v.worktree !== undefined && typeof v.worktree !== "boolean")
     throw new ValidationError("worktree must be boolean");
-  const checks = v.checks ?? [];
-  if (!Array.isArray(checks) || checks.length > 20)
-    throw new ValidationError("checks must be an array of command argv arrays");
-  for (const argv of checks) {
-    if (!Array.isArray(argv) || argv.length < 1 || argv.length > 50)
-      throw new ValidationError("Each check must be a nonempty argv array");
-    for (const arg of argv) string(arg, "check argument", 1000);
-  }
+  const checks = parseChecks(v.checks === undefined ? [] : v.checks);
   return {
     name,
     repoKey,
     worktree: v.worktree ?? true,
-    checks: checks as string[][],
+    checks,
   };
 }
 export function parseIssue(value: unknown): CreateIssue {
