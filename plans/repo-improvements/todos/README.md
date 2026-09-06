@@ -21,7 +21,7 @@ default_agent: codex
 | [05-realtime-logs.md](05-realtime-logs.md) | P1 | hard | codex（继承默认） | gpt-6-astra / max | 跨页跟随、有界历史窗口与通知刷新控制。 |
 | [06-worker-query-indexes.md](done/06-worker-query-indexes.md) | P2 | hard | codex（继承默认） | gpt-6-astra / max | 已完成：待处理部分索引、增量迁移和查询计划证据。 |
 | [07-dependency-audit.md](done/07-dependency-audit.md) | P2 | medium | codex（继承默认） | gpt-6-astra / xhigh | 已完成：处理 esbuild 告警并建立可重复审计 gate。 |
-| [08-setup-regressions.md](08-setup-regressions.md) | P2 | medium | codex（继承默认） | gpt-6-astra / xhigh | 自动验证依赖安装的保护边界和 checkout 隔离。 |
+| [08-setup-regressions.md](done/08-setup-regressions.md) | P2 | medium | codex（继承默认） | gpt-6-astra / xhigh | 已完成：自动验证依赖安装的保护边界和 checkout 隔离。 |
 | [09-docs-and-acceptance.md](09-docs-and-acceptance.md) | P2 | easy | codex（继承默认） | gpt-6-astra / high | 修订当前使用说明，整理最终验证证据。 |
 
 ## 文件
@@ -33,7 +33,7 @@ default_agent: codex
 5. `05-realtime-logs.md` — 依赖 04-submission-validation.md。
 6. `done/06-worker-query-indexes.md` — 已完成；依赖：无。
 7. [07-dependency-audit.md](done/07-dependency-audit.md) — 已完成；依赖：无。
-8. `08-setup-regressions.md` — 依赖 07-dependency-audit.md。
+8. [08-setup-regressions.md](done/08-setup-regressions.md) — 已完成；依赖 07-dependency-audit.md。
 9. `09-docs-and-acceptance.md` — 依赖 01-database-lock-order.md、02-worker-identity.md、03-command-lifecycle.md、04-submission-validation.md、05-realtime-logs.md、06-worker-query-indexes.md、07-dependency-audit.md、08-setup-regressions.md。
 
 ## 并行与集成

@@ -25,12 +25,13 @@
     "build": "bun run --bun turbo run build",
     "typecheck": "bun run --bun tsc --noEmit --project scripts/tsconfig.json && bun run --bun tsc --noEmit --project tests/browser/tsconfig.json && bun run --bun turbo run typecheck",
     "test": "bun run --bun turbo run test",
+    "test:setup": "bun test scripts/test/setup-deps.test.ts --timeout 30000",
     "test:integration": "bun scripts/test-integration.ts",
     "test:herdr": "bun scripts/test-herdr.ts",
     "test:browser": "bun x --no-install playwright test",
     "lint": "bun run --bun biome check .",
     "format": "bun run --bun biome check --write .",
-    "check": "bun run lint && bun run typecheck && bun run test && bun run build"
+    "check": "bun run lint && bun run typecheck && bun run test:setup && bun run test && bun run build"
   },
   "overrides": {
     "@esbuild-kit/core-utils": {
