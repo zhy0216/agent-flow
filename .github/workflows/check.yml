@@ -37,6 +37,8 @@ jobs:
         run: rustup toolchain install 1.93.1 --profile minimal
       - name: Build and install pinned source dependencies
         run: bun run setup:deps
+      - name: Audit dependencies against the official npm registry
+        run: bun run audit:deps
       - name: Lint, types, unit and DOM tests, production builds
         run: bun run check
       - name: PostgreSQL and durable execution integration

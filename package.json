@@ -13,6 +13,7 @@
   "scripts": {
     "setup:local": "bun scripts/link-local.ts",
     "setup:deps": "bun scripts/setup-deps.ts",
+    "audit:deps": "npm_config_registry=https://registry.npmjs.org bun audit",
     "db:generate": "bun run --bun drizzle-kit generate --config packages/db/drizzle.config.ts && bun run --bun drizzle-kit generate --config apps/worker/drizzle.config.ts",
     "db:migrate": "bun scripts/migrate.ts",
     "dev": "bun run --bun turbo run dev --filter=@agent-flow/web --filter=@agent-flow/server",
@@ -30,6 +31,11 @@
     "lint": "bun run --bun biome check .",
     "format": "bun run --bun biome check --write .",
     "check": "bun run lint && bun run typecheck && bun run test && bun run build"
+  },
+  "overrides": {
+    "@esbuild-kit/core-utils": {
+      "esbuild": "0.25.12"
+    }
   },
   "devDependencies": {
     "@agent-flow/contracts": "workspace:*",
