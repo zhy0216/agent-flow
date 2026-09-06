@@ -146,6 +146,55 @@ function workerDto(row: WorkerRow): Worker {
 }
 const activeRunStatuses = ["queued", "running", "blocked"] as const;
 
+type Transaction = Parameters<Parameters<Database["orm"]["transaction"]>[0]>[0];
+
+// Business transactions lock project -> issue -> worker (if needed) -> run.
+// A shared project lock lets different issues progress independently, while
+// project deletion takes an exclusive lock before checking runs or issues.
+// Discover only ownership before locking; re-read visibility, ownership and
+// state under the locks. Never acquire an ancestor after locking a child.
+async function lockIssue(
+  tx: Transaction,
+  issueId: string,
+  includeDeleted = false,
+) {
+  const owner = required(
+    await tx
+      .select({ projectId: issues.projectId })
+      .from(issues)
+      .where(eq(issues.id, issueId)),
+    "Issue",
+  );
+  const project = required(
+    await tx
+      .select(projectColumns)
+      .from(projects)
+      .where(
+        and(
+          eq(projects.id, owner.projectId),
+          includeDeleted ? undefined : isNull(projects.deletedAt),
+        ),
+      )
+      .for("share"),
+    "Project",
+  );
+  const issue = required(
+    await tx
+      .select(issueColumns)
+      .from(issues)
+      .where(
+        and(
+          eq(issues.id, issueId),
+          eq(issues.projectId, project.id),
+          includeDeleted ? undefined : isNull(issues.deletedAt),
+        ),
+      )
+      .for("update"),
+    "Issue",
+  );
+  return { project, issue };
+}
+
 export class Database {
   readonly sql: SQL;
   readonly orm;
@@ -215,6 +264,8 @@ export class Database {
   }
   async deleteProject(projectId: string): Promise<void> {
     await this.orm.transaction(async (tx) => {
+      // Child mutations take a shared project lock, so the active-run check
+      // and all issue tombstones remain stable under this exclusive lock.
       required(
         await tx
           .select({ id: projects.id })
@@ -319,14 +370,7 @@ export class Database {
   }
   async updateIssue(issueId: string, input: CreateIssue): Promise<Issue> {
     return this.orm.transaction(async (tx) => {
-      const current = required(
-        await tx
-          .select(issueColumns)
-          .from(issues)
-          .where(and(isNull(issues.deletedAt), eq(issues.id, issueId)))
-          .for("update"),
-        "Issue",
-      );
+      const { issue: current } = await lockIssue(tx, issueId);
       if (current.projectId !== input.projectId)
         throw new DomainError(
           409,
@@ -389,14 +433,7 @@ export class Database {
   }
   async deleteIssue(issueId: string): Promise<void> {
     await this.orm.transaction(async (tx) => {
-      required(
-        await tx
-          .select({ id: issues.id })
-          .from(issues)
-          .where(and(isNull(issues.deletedAt), eq(issues.id, issueId)))
-          .for("update"),
-        "Issue",
-      );
+      await lockIssue(tx, issueId);
       const active = await tx
         .select({ id: runs.id })
         .from(runs)
@@ -604,7 +641,8 @@ export class Database {
   }
   async submitRun(input: SubmitRun): Promise<Run> {
     return this.orm.transaction(async (tx) => {
-      // Key lock covers concurrent retries before the unique run row exists.
+      // The key lock precedes all row locks, covering retries before a run
+      // exists. An existing-key response is read-only and takes no row locks.
       await tx.execute(
         sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.idempotencyKey},0))`,
       );
@@ -632,28 +670,9 @@ export class Database {
           );
         return run;
       }
-      const issue = issueDto(
-        required(
-          await tx
-            .select(issueColumns)
-            .from(issues)
-            .where(and(isNull(issues.deletedAt), eq(issues.id, input.issueId)))
-            .for("update"),
-          "Issue",
-        ),
-      );
-      const project = projectDto(
-        required(
-          await tx
-            .select(projectColumns)
-            .from(projects)
-            .where(
-              and(isNull(projects.deletedAt), eq(projects.id, issue.projectId)),
-            )
-            .for("share"),
-          "Project",
-        ),
-      );
+      const locked = await lockIssue(tx, input.issueId);
+      const issue = issueDto(locked.issue);
+      const project = projectDto(locked.project);
       const worker = workerDto(
         required(
           await tx
@@ -791,6 +810,16 @@ export class Database {
     connectionId?: string,
   ): Promise<number> {
     return this.orm.transaction(async (tx) => {
+      const owner = required(
+        await tx
+          .select({ issueId: runs.issueId })
+          .from(runs)
+          .where(and(eq(runs.id, event.runId), eq(runs.workerId, workerId))),
+        "Run",
+      );
+      // Tombstones still accept replayed events after a lost ACK. Lock them
+      // in the same order, then fence the connection until the event commits.
+      await lockIssue(tx, owner.issueId, true);
       if (connectionId) {
         const owner = await tx
           .select({ id: workers.id })
@@ -814,7 +843,13 @@ export class Database {
         await tx
           .select(runColumns)
           .from(runs)
-          .where(and(eq(runs.id, event.runId), eq(runs.workerId, workerId)))
+          .where(
+            and(
+              eq(runs.id, event.runId),
+              eq(runs.workerId, workerId),
+              eq(runs.issueId, owner.issueId),
+            ),
+          )
           .for("update"),
         "Run",
       );
@@ -1056,27 +1091,20 @@ export class Database {
     note: string,
   ): Promise<Run> {
     return this.orm.transaction(async (tx) => {
+      const owner = required(
+        await tx
+          .select({ issueId: runs.issueId })
+          .from(runs)
+          .where(eq(runs.id, runId)),
+        "Run",
+      );
+      const { issue } = await lockIssue(tx, owner.issueId);
       const run = runDto(
         required(
           await tx
             .select(runColumns)
             .from(runs)
-            .where(
-              and(
-                eq(runs.id, runId),
-                exists(
-                  tx
-                    .select({ id: issues.id })
-                    .from(issues)
-                    .where(
-                      and(
-                        eq(issues.id, runs.issueId),
-                        isNull(issues.deletedAt),
-                      ),
-                    ),
-                ),
-              ),
-            )
+            .where(and(eq(runs.id, runId), eq(runs.issueId, issue.id)))
             .for("update"),
           "Run",
         ),
@@ -1087,11 +1115,6 @@ export class Database {
           "review_unavailable",
           "Only successful runs can be reviewed",
         );
-      await tx
-        .select({ id: issues.id })
-        .from(issues)
-        .where(eq(issues.id, run.issueId))
-        .for("update");
       const latest = await tx
         .select({ id: runs.id })
         .from(runs)

@@ -252,6 +252,15 @@ suite("Zebra listener control channel and workspace API", () => {
     };
     const run = await api<Run>("/api/runs", "POST", request);
     expect((await api<Run>("/api/runs", "POST", request)).id).toBe(run.id);
+    const conflict = await fetch(`${base}/api/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...request, idempotencyKey: crypto.randomUUID() }),
+    });
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toMatchObject({
+      error: { code: "active_run" },
+    });
     const command = await client.next("run.submit");
     expect(command.payload).toMatchObject({
       run: { id: run.id },

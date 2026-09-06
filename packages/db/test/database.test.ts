@@ -357,6 +357,98 @@ suite("PostgreSQL business persistence and transactions", () => {
       db.review(run.id, "reject", "changed mind"),
     ).rejects.toMatchObject({ code: "already_reviewed" });
   });
+  test("an event insert failure rolls back both run and issue projections", async () => {
+    const { issue, workerId } = await setup();
+    const run = await db.submitRun({
+      issueId: issue.id,
+      workerId,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const event = {
+      runId: run.id,
+      sequence: 1,
+      type: "run.status",
+      timestamp: new Date().toISOString(),
+      payload: { status: "running" },
+    };
+    await db.appendEvent(workerId, event, "connection");
+    // Timestamp conversion fails at the event INSERT, after both UPDATEs.
+    await expect(
+      db.appendEvent(
+        workerId,
+        {
+          ...event,
+          sequence: 2,
+          timestamp: "invalid-timestamp",
+          payload: { status: "succeeded" },
+        },
+        "connection",
+      ),
+    ).rejects.toMatchObject({ cause: { errno: "22007" } });
+    expect(await db.run(run.id)).toMatchObject({
+      status: "running",
+      lastSequence: 1,
+      artifacts: [],
+    });
+    expect((await db.issue(issue.id)).status).toBe("in-progress");
+    expect((await db.events(run.id)).events).toEqual([event]);
+    expect(await db.pendingCommands(workerId)).toHaveLength(1);
+    await db.appendEvent(
+      workerId,
+      {
+        ...event,
+        sequence: 2,
+        payload: { status: "succeeded" },
+      },
+      "connection",
+    );
+    expect(await db.run(run.id)).toMatchObject({
+      status: "succeeded",
+      lastSequence: 2,
+    });
+    expect((await db.issue(issue.id)).status).toBe("in-review");
+  });
+  test("rejected review is idempotent and cannot affect a newer retry", async () => {
+    const { issue, workerId } = await setup();
+    const run = await db.submitRun({
+      issueId: issue.id,
+      workerId,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const event = {
+      runId: run.id,
+      sequence: 1,
+      type: "run.status",
+      timestamp: new Date().toISOString(),
+      payload: { status: "running" },
+    };
+    await db.appendEvent(workerId, event);
+    await db.appendEvent(workerId, {
+      ...event,
+      sequence: 2,
+      payload: { status: "succeeded" },
+    });
+    const reviews = await Promise.all(
+      Array.from({ length: 3 }, () =>
+        db.review(run.id, "reject", "Needs another attempt"),
+      ),
+    );
+    expect(reviews.every((review) => review.review === "rejected")).toBe(true);
+    expect((await db.issue(issue.id)).status).toBe("todo");
+    expect(
+      await db.sql`SELECT id FROM agent_flow.run_actions WHERE run_id=${run.id} AND type='review'`,
+    ).toHaveLength(1);
+    const retried = await db.retry(run.id, crypto.randomUUID());
+    await expect(
+      db.review(run.id, "reject", "Old review retry"),
+    ).rejects.toMatchObject({ status: 409, code: "stale_run" });
+    expect(await db.run(retried.id)).toMatchObject({
+      status: "queued",
+      review: null,
+    });
+    expect((await db.issue(issue.id)).status).toBe("in-progress");
+    expect(await db.pendingCommands(workerId)).toHaveLength(2);
+  });
   test("disconnect preserves active state; cancellation awaits worker confirmation; retry creates history", async () => {
     const { issue, workerId } = await setup();
     const run = await db.submitRun({
