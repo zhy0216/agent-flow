@@ -15,7 +15,7 @@ default_agent: codex
 | 文件 | 优先级 | 难度 | agent | 模型 / Codex 推理强度 | 说明 |
 | --- | --- | --- | --- | --- | --- |
 | [01-database-lock-order.md](01-database-lock-order.md) | P1 | hard | codex（继承默认） | gpt-6-astra / max | 修复已复现的提交与事件死锁，保留事务不变量。 |
-| [02-worker-identity.md](02-worker-identity.md) | P1 | medium | codex（继承默认） | gpt-6-astra / xhigh | 原子配对，验证身份文件和 repo 字典。 |
+| [02-worker-identity.md](done/02-worker-identity.md) | P1 | medium | codex（继承默认） | gpt-6-astra / xhigh | 已完成：原子配对，验证身份文件和 repo 字典。 |
 | [03-command-lifecycle.md](03-command-lifecycle.md) | P1 | hard | codex（继承默认） | gpt-6-astra / max | 限制输出内存，使超时涵盖自有后代和管道。 |
 | [04-submission-validation.md](04-submission-validation.md) | P1 | hard | codex（继承默认） | gpt-6-astra / max | 统一检查 argv，提交前匹配 worker 的目标仓库。 |
 | [05-realtime-logs.md](05-realtime-logs.md) | P1 | hard | codex（继承默认） | gpt-6-astra / max | 跨页跟随、有界历史窗口与通知刷新控制。 |
@@ -27,7 +27,7 @@ default_agent: codex
 ## 文件
 
 1. `01-database-lock-order.md` — 依赖：无。
-2. `02-worker-identity.md` — 依赖：无。
+2. [02-worker-identity.md](done/02-worker-identity.md) — 已完成；依赖：无。
 3. `03-command-lifecycle.md` — 依赖：无。
 4. `04-submission-validation.md` — 依赖 01-database-lock-order.md。
 5. `05-realtime-logs.md` — 依赖 04-submission-validation.md。

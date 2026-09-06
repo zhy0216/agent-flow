@@ -1,7 +1,8 @@
-import { mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import type { PairingResult } from "@agent-flow/contracts";
+import { pairingRecovery, reserveIdentityFile } from "./identity-file";
 
 export interface WorkerConfig {
   databaseUrl: string;
@@ -37,7 +38,7 @@ export async function readWorkerConfig(
       "AGENT_FLOW_REPOS must be a JSON object of repo keys to absolute paths.",
     );
   }
-  const repos: Record<string, string> = {};
+  const repos: Record<string, string> = Object.create(null);
   for (const [key, path] of Object.entries(rawRepos)) {
     if (
       !/^[a-zA-Z0-9_.-]+$/.test(key) ||
@@ -70,53 +71,94 @@ export interface WorkerIdentity extends PairingResult {
   apiUrl: string;
 }
 
+function isPairingResult(value: unknown): value is PairingResult {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    "workerId" in value &&
+    typeof value.workerId === "string" &&
+    value.workerId.trim().length > 0 &&
+    "token" in value &&
+    typeof value.token === "string" &&
+    value.token.trim().length > 0
+  );
+}
+
 export async function loadIdentity(
   config: WorkerConfig,
 ): Promise<WorkerIdentity> {
-  const value = JSON.parse(
-    await readFile(config.identityFile, "utf8"),
-  ) as Partial<WorkerIdentity>;
-  if (!value.workerId || !value.token || value.apiUrl !== config.apiUrl) {
+  const contents = await readFile(config.identityFile, "utf8");
+  let value: unknown;
+  try {
+    value = JSON.parse(contents);
+  } catch {
     throw new Error(
-      "Worker identity is missing or belongs to another API. Pair this worker first.",
+      "Worker identity contains invalid JSON. Restore a valid identity file before starting.",
     );
   }
-  return value as WorkerIdentity;
+  if (!isPairingResult(value)) {
+    throw new Error(
+      "Worker identity must be an object with non-empty string workerId and token fields.",
+    );
+  }
+  if (!("apiUrl" in value) || value.apiUrl !== config.apiUrl) {
+    throw new Error(
+      "Worker identity apiUrl is missing or belongs to another API. Use the matching identity and API.",
+    );
+  }
+  return { workerId: value.workerId, token: value.token, apiUrl: value.apiUrl };
 }
 
 export async function pairWorker(
   config: WorkerConfig,
   code: string,
 ): Promise<WorkerIdentity> {
-  // Never overwrite an identity that may still own live resources.
+  const reservation = await reserveIdentityFile(
+    config.identityFile,
+    config.apiUrl,
+  );
+  let stage = "Pairing request failed; the remote outcome is unknown.";
+  let published = false;
   try {
-    await readFile(config.identityFile);
-    throw new Error(
-      "An identity already exists; use that identity or a new AGENT_FLOW_IDENTITY_FILE.",
-    );
+    const response = await fetch(`${config.apiUrl}/api/workers/pair`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, name: config.name }),
+      redirect: "error",
+    });
+    if (!response.ok) {
+      stage = `Pairing failed (HTTP ${response.status}); the remote outcome needs confirmation.`;
+      await response.body?.cancel();
+      throw new Error(stage);
+    }
+    stage =
+      "Pairing returned an invalid identity; the code may already be consumed.";
+    const result: unknown = await response.json();
+    if (!isPairingResult(result)) throw new Error(stage);
+    const identity = {
+      workerId: result.workerId,
+      token: result.token,
+      apiUrl: config.apiUrl,
+    };
+    stage =
+      "Remote pairing succeeded, but saving or publishing the identity failed.";
+    await reservation.publish(`${JSON.stringify(identity, null, 2)}\n`);
+    published = true;
+    await reservation.cleanup();
+    return identity;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-  }
-  const response = await fetch(`${config.apiUrl}/api/workers/pair`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code, name: config.name }),
-  });
-  if (!response.ok)
+    // Never echo an HTTP body, JSON parser excerpt, fetch error or credential.
+    const conflict =
+      (error as NodeJS.ErrnoException).code === "EEXIST"
+        ? " An identity now exists and was not overwritten."
+        : "";
     throw new Error(
-      `Pairing failed (${response.status}): ${await response.text()}`,
+      published
+        ? `Identity saved to ${config.identityFile}, but pairing cleanup failed. Use the saved identity; do not pair again. ${pairingRecovery(reservation.lock, reservation.temporary)}`
+        : `${stage}${conflict} ${pairingRecovery(reservation.lock, reservation.temporary)}`,
     );
-  const result = (await response.json()) as PairingResult;
-  if (typeof result.workerId !== "string" || typeof result.token !== "string") {
-    throw new Error("Pairing returned an invalid identity.");
+  } finally {
+    await reservation.close();
   }
-  const identity = { ...result, apiUrl: config.apiUrl };
-  await mkdir(dirname(config.identityFile), { recursive: true, mode: 0o700 });
-  const temporary = `${config.identityFile}.${crypto.randomUUID()}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(identity, null, 2)}\n`, {
-    mode: 0o600,
-    flag: "wx",
-  });
-  await rename(temporary, config.identityFile);
-  return identity;
 }
