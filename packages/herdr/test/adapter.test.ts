@@ -443,6 +443,36 @@ describe("typed Herdr operation adapter", () => {
     expect(results[0]?.exitCode).toBe(1);
     expect(f.calls[0]?.args).toEqual(["test", "--filter", "literal;name"]);
   });
+  test("check timeout keeps its output evidence uncertain and never replays", async () => {
+    const f = fixture();
+    const stdout =
+      "[stdout truncated: 10 bytes omitted; retained 4 bytes, limit 4 UTF-8 bytes]\ntail";
+    f.handler(() => ({ exitCode: 0, stdout, stderr: "", timedOut: true }));
+    const config = {
+      cwd: root,
+      checks: [
+        { command: "bun" as const, args: ["test"] },
+        { command: "git" as const, args: ["status"] },
+      ],
+    };
+    await expect(f.adapter.runChecks("checks", config)).rejects.toMatchObject({
+      code: "check_timeout",
+      details: [
+        {
+          ...config.checks[0],
+          exitCode: 0,
+          stdout,
+          stderr: "",
+          timedOut: true,
+        },
+      ],
+    });
+    expect(f.journal.required("run-1", "checks").state).toBe("uncertain");
+    await expect(f.adapter.runChecks("checks", config)).rejects.toMatchObject({
+      code: "reconciliation_required",
+    });
+    expect(f.calls).toHaveLength(1);
+  });
   test("manual reconciliation cannot claim a pane that existed before creation", async () => {
     const f = fixture();
     f.journal.failCompletion = true;
@@ -675,7 +705,11 @@ live(
     try {
       expect(pane.paneId).not.toBe(process.env.HERDR_PANE_ID);
       // Start/get/read prove actual response shapes and stable session ownership.
-      const agent = await adapter.startAgent("start", { paneId: pane.paneId });
+      const agent = await adapter.startAgent("start", {
+        paneId: pane.paneId,
+        approval: "never",
+        sandbox: "danger-full-access",
+      });
       expect(agent.processGroupId).toBeGreaterThan(0);
       expect((await adapter.getAgent(pane.paneId)).processGroupId).toBe(
         agent.processGroupId,

@@ -8,7 +8,10 @@ import {
   relative,
   resolve,
 } from "node:path";
+import { runCommand } from "./command-runner";
 import { type HerdrContext, requireHerdrContext } from "./index";
+
+export { runCommand } from "./command-runner";
 
 export type HerdrOperationKind =
   | "worktree.create"
@@ -99,38 +102,6 @@ export class HerdrAdapterError extends Error {
     this.name = "HerdrAdapterError";
   }
 }
-
-/** Executes argv directly, never via shell. A timeout on a mutation is ambiguous,
- * regardless of whether killing the CLI succeeded: the server may have applied it. */
-export const runCommand: CommandRunner = async (request) => {
-  const child = Bun.spawn([request.command, ...request.args], {
-    cwd: request.cwd,
-    env: request.env,
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    child.kill("SIGKILL");
-  }, request.timeoutMs);
-  try {
-    const [exitCode, stdout, stderr] = await Promise.all([
-      child.exited,
-      new Response(child.stdout).text(),
-      new Response(child.stderr).text(),
-    ]);
-    return {
-      exitCode,
-      stdout: stdout.slice(-2_000_000),
-      stderr: stderr.slice(-200_000),
-      timedOut,
-    };
-  } finally {
-    clearTimeout(timer);
-  }
-};
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value))
