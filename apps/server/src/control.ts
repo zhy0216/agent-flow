@@ -200,6 +200,7 @@ export class ControlService {
           id: event.runId,
           runId: event.runId,
           sequence,
+          eventType: event.type,
         });
         if (event.type === "run.status") {
           try {

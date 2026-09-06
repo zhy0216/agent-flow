@@ -9,6 +9,7 @@ import {
 
 const apiBase = "http://127.0.0.1:3174/api";
 const fixtureBase = "http://127.0.0.1:3175";
+
 async function capture(page: Page, info: TestInfo, name: string) {
   const path = info.outputPath(`${name}.png`);
   await page.screenshot({ path, fullPage: true });
@@ -65,6 +66,22 @@ async function emit(
   type = "run.status",
 ) {
   await fixture(request, "/event", { workerId, runId, type, payload });
+}
+async function emitLogs(
+  request: APIRequestContext,
+  workerId: string,
+  runId: string,
+  count: number,
+  prefix: string,
+) {
+  return fixture<{ sequence: number }>(request, "/events", {
+    workerId,
+    runId,
+    events: Array.from({ length: count }, (_, index) => ({
+      type: "log",
+      payload: { text: `${prefix} ${index + 1}: <script>仅文本</script>` },
+    })),
+  });
 }
 async function start(page: Page, issueId: string, workerId: string) {
   await page.goto(`/issues/${issueId}`);
@@ -282,13 +299,9 @@ test("real API and SSE deliver ordered paginated logs, worker reconnect, blocked
         { text: `输出 ${i}: <script>作为文本展示</script>` },
         "log",
       );
-    await expect(page.locator(".log-entry")).toHaveCount(100);
-    await expect(page.locator(".terminal script")).toHaveCount(0);
-    await expect(
-      page.getByRole("button", { name: "加载下一段输出 ↓" }),
-    ).toBeVisible();
-    await page.getByRole("button", { name: "加载下一段输出 ↓" }).click();
     await expect(page.locator(".log-entry")).toHaveCount(106);
+    await expect(page.locator(".terminal script")).toHaveCount(0);
+    await expect(page.locator(".log-entry").last()).toContainText("输出 105:");
     await fixture(request, "/disconnect", { workerId });
     await expect(
       page.getByText("Worker 连接中断", { exact: true }),
@@ -505,4 +518,259 @@ test("225 persisted issues stay reachable while each list page renders at most 1
     page.getByRole("link", { name: /长列表任务 001/ }),
   ).toBeVisible();
   await expect(page.getByRole("navigation", { name: "任务分页" })).toBeHidden();
+});
+
+test("live logs cross pages, freeze reading position, bound 1000+ history and recover failed pages and SSE gaps", async ({
+  page,
+  request,
+}, info) => {
+  test.setTimeout(120_000);
+  const { issue } = await seed(request, "有界实时日志");
+  const { workerId } = await createWorker(request, "有界日志 Worker");
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  try {
+    const runId = await start(page, issue.id, workerId);
+    await emit(request, workerId, runId, { status: "running" });
+    await expect(page.locator(".run-overview")).toContainText("执行中");
+    const terminal = page.getByRole("log", { name: "执行事件与输出" });
+    const toggle = page.getByLabel("跟随最新输出");
+    const rows = page.locator(".log-entry");
+    await expect(rows).toHaveCount(1);
+    const calls: string[] = [];
+    let openedStreams = 0;
+    page.on("request", (request) => {
+      const url = new URL(request.url());
+      if (url.pathname === "/api/events") openedStreams++;
+      if (
+        request.method() === "GET" &&
+        /^\/api\/(issues|runs)/.test(url.pathname)
+      )
+        calls.push(url.pathname + url.search);
+    });
+    const countRequests = () => ({
+      issues: calls.filter((path) => path.startsWith("/api/issues")).length,
+      runs: calls.filter((path) => path === "/api/runs").length,
+      run: calls.filter((path) => path === `/api/runs/${runId}`).length,
+      cursors: calls
+        .filter((path) => path.includes("/events?"))
+        .map((path) =>
+          Number(new URL(path, apiBase).searchParams.get("after")),
+        ),
+    });
+    await emitLogs(request, workerId, runId, 250, "连续输出");
+    await expect(rows).toHaveCount(251);
+    await expect(rows.last()).toContainText("连续输出 250:");
+    await expect(terminal.locator("script")).toHaveCount(0);
+    await expect
+      .poll(() =>
+        terminal.evaluate((node) =>
+          Math.abs(node.scrollHeight - node.clientHeight - node.scrollTop),
+        ),
+      )
+      .toBeLessThanOrEqual(1);
+    const burst = countRequests();
+    expect(burst.run).toBeLessThanOrEqual(2);
+    expect(burst.issues).toBeLessThanOrEqual(2);
+    expect(burst.cursors.length).toBeLessThanOrEqual(20);
+    expect(burst.cursors.every((cursor) => cursor >= 1)).toBe(true);
+    calls.length = 0;
+    await emitLogs(request, workerId, runId, 30, "新增尾部");
+    await expect(rows.last()).toContainText("新增尾部 30:");
+    await expect(rows).toHaveCount(281);
+    const tail = countRequests();
+    expect(tail.cursors.length).toBeLessThanOrEqual(5);
+    expect(tail.cursors.every((cursor) => cursor >= 251)).toBe(true);
+
+    await toggle.focus();
+    await page.keyboard.press("Space");
+    await expect(toggle).not.toBeChecked();
+    await terminal.focus();
+    // Reaching the target position can precede Chromium's scrollend. An
+    // opposite key in that gap can be consumed by the finishing animation.
+    const settledScrollTop = () =>
+      terminal.evaluate(async (node) => {
+        let previous = node.scrollTop;
+        let stable = 0;
+        for (let frame = 0; frame < 120; frame++) {
+          await new Promise(requestAnimationFrame);
+          stable = node.scrollTop === previous ? stable + 1 : 0;
+          previous = node.scrollTop;
+          if (stable === 8) return previous;
+        }
+        throw new Error("Log viewport scrolling did not settle");
+      });
+    const followedTop = await settledScrollTop();
+    await page.keyboard.press("PageUp");
+    await expect
+      .poll(() => terminal.evaluate((node) => node.scrollTop))
+      .toBeLessThan(followedTop);
+    const keyboardTop = await settledScrollTop();
+    expect(keyboardTop).toBeLessThan(followedTop);
+    await page.keyboard.press("PageDown");
+    await expect
+      .poll(() => terminal.evaluate((node) => node.scrollTop))
+      .toBeGreaterThan(keyboardTop);
+    const pageDownTop = await settledScrollTop();
+    expect(pageDownTop).toBeGreaterThan(keyboardTop);
+    await expect(terminal).toBeFocused();
+    await terminal.evaluate((node) =>
+      node.scrollTo({ top: 140, behavior: "instant" }),
+    );
+    calls.length = 0;
+    const history = await emitLogs(request, workerId, runId, 850, "历史输出");
+    expect(history.sequence).toBe(1131);
+    await expect(page.locator(".log-footer")).toContainText("已记录 #1131");
+    await expect(rows).toHaveCount(281);
+    expect(await terminal.evaluate((node) => node.scrollTop)).toBe(140);
+    const paused = countRequests();
+    expect(paused.cursors).toEqual([]);
+    await toggle.focus();
+    await page.keyboard.press("Space");
+    await expect(rows.last()).toContainText("历史输出 850:");
+    await expect(rows).toHaveCount(500);
+    await expect(page.locator(".log-footer")).toContainText("当前 #632–#1131");
+    const catchup = countRequests();
+    expect(catchup.cursors.every((cursor) => cursor >= 281)).toBe(true);
+    const older = page.getByRole("button", { name: "读取更早输出 ↑" });
+    await older.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".log-footer")).toContainText("当前 #532–#631");
+    await expect(terminal).toBeFocused();
+    await expect(rows).toHaveCount(100);
+    for (const first of [432, 332, 232, 132, 32, 1]) {
+      await older.click();
+      await expect(rows.first().locator(".log-sequence")).toHaveText(
+        String(first).padStart(3, "0"),
+      );
+    }
+    await expect(older).toBeDisabled();
+    await page.getByRole("button", { name: "读取后续输出 ↓" }).click();
+    await expect(rows.first().locator(".log-sequence")).toHaveText("101");
+
+    let failed = false;
+    let failBeforeReconnect = false;
+    await page.route(`**/api/runs/${runId}/events?**`, async (route) => {
+      if (
+        failBeforeReconnect ||
+        (!failed &&
+          new URL(route.request().url()).searchParams.get("after") === "400")
+      ) {
+        failed = true;
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({
+            error: { message: "单页暂时不可用，请重试" },
+          }),
+        });
+      } else await route.continue();
+    });
+    await page.getByRole("button", { name: "返回最新输出" }).click();
+    await expect(page.getByRole("alert")).toContainText(
+      "单页暂时不可用，请重试",
+    );
+    await expect(rows.last().locator(".log-sequence")).toHaveText("400");
+    calls.length = 0;
+    await page.getByRole("button", { name: "重试", exact: true }).click();
+    await expect(rows.last()).toContainText("历史输出 850:");
+    await expect(rows).toHaveCount(500);
+    const retry = countRequests();
+    expect(retry.cursors[0]).toBe(400);
+    expect(retry.cursors.every((cursor) => cursor >= 400)).toBe(true);
+
+    failBeforeReconnect = true;
+    await emitLogs(request, workerId, runId, 1, "断线前未读输出");
+    await expect(page.getByRole("alert")).toContainText(
+      "单页暂时不可用，请重试",
+    );
+    await page.context().setOffline(true);
+    const restart = await fixture<{ upstreamSseClosed: string }>(
+      request,
+      "/restart-api",
+      { workerId },
+    );
+    expect(restart.upstreamSseClosed).not.toBe("still-open");
+    await expect(page.locator(".stream-status")).toContainText("实时连接中断");
+    await emitLogs(request, workerId, runId, 170, "断线输出");
+    await emit(request, workerId, runId, {
+      status: "succeeded",
+      artifacts: [
+        { type: "checks", label: "恢复后检查", value: "重连恢复的真实产物" },
+      ],
+    });
+    await expect(rows.last()).toContainText("历史输出 850:");
+    calls.length = 0;
+    failBeforeReconnect = false;
+    await page.context().setOffline(false);
+    await expect(page.locator(".stream-status")).toContainText(
+      "实时同步已连接",
+    );
+    await expect(
+      page.getByText("重连恢复的真实产物", { exact: true }),
+    ).toBeVisible();
+    await expect(rows.last().locator(".log-sequence")).toHaveText("1303", {
+      timeout: 4000,
+    });
+    await expect(rows).toHaveCount(500);
+    const reconnect = countRequests();
+    expect(reconnect.run).toBeGreaterThanOrEqual(1);
+    expect(reconnect.run).toBeLessThanOrEqual(3);
+    expect(reconnect.issues).toBeLessThanOrEqual(3);
+    expect(openedStreams).toBeGreaterThanOrEqual(1);
+    expect(reconnect.cursors.every((cursor) => cursor >= 1131)).toBe(true);
+    const persisted = await api<Run>(request, `/runs/${runId}`);
+    expect(persisted.lastSequence).toBe(1303);
+    expect(persisted.status).toBe("succeeded");
+    const sequences = await page.locator(".log-sequence").allTextContents();
+    expect(sequences.map(Number)).toEqual(
+      Array.from({ length: 500 }, (_, index) => index + 804),
+    );
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(
+      page.getByRole("navigation", { name: "输出历史" }),
+    ).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+    await toggle.focus();
+    await page.keyboard.press("Space");
+    await expect(toggle).not.toBeChecked();
+    await page.getByRole("button", { name: "返回最新输出" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(toggle).toBeChecked();
+    await expect
+      .poll(() =>
+        terminal.evaluate((node) =>
+          Math.abs(node.scrollHeight - node.clientHeight - node.scrollTop),
+        ),
+      )
+      .toBeLessThanOrEqual(1);
+    await capture(page, info, "bounded-logs-mobile");
+    const proof = {
+      keyboard: { followedTop, pageUpTop: keyboardTop, pageDownTop },
+      burst,
+      tail,
+      paused,
+      catchup,
+      retry,
+      reconnect,
+      openedStreams,
+      restart,
+      persistedSequence: persisted.lastSequence,
+      renderedRange: [804, 1303],
+      maxRendered: 500,
+    };
+    console.info("LOG_BROWSER_PROOF", JSON.stringify(proof));
+    await info.attach("log-pagination-requests-reconnect", {
+      body: JSON.stringify(proof, null, 2),
+      contentType: "application/json",
+    });
+    expect(errors).toEqual([]);
+  } finally {
+    await page.context().setOffline(false);
+    await fixture(request, "/disconnect", { workerId });
+  }
 });

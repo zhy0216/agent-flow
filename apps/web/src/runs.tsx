@@ -6,12 +6,7 @@ import type {
   Worker,
 } from "@agent-flow/contracts";
 import { runStatuses } from "@agent-flow/contracts";
-import {
-  useInfiniteQuery,
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { jsonBody, request } from "./api";
@@ -28,12 +23,13 @@ import {
   Time,
 } from "./components";
 import {
-  eventsOptions,
+  EVENT_PAGE_SIZE,
   issuesQuery,
   runQuery,
   runsQuery,
   workersQuery,
 } from "./queries";
+import { useRunEvents } from "./use-run-events";
 
 function ReviewStatus({ run }: { run: Run }) {
   if (run.review === "approved")
@@ -276,7 +272,7 @@ export function RunPage({ id }: { id: string }) {
   const run = useQuery(runQuery(id));
   const workers = useQuery(workersQuery);
   const issues = useQuery(issuesQuery());
-  const events = useInfiniteQuery(eventsOptions(id));
+  const events = useRunEvents(id, run.data?.lastSequence ?? 0);
   const client = useQueryClient();
   const navigate = useNavigate();
   const [action, setAction] = useState<
@@ -288,7 +284,7 @@ export function RunPage({ id }: { id: string }) {
   const [resolutionMode, setResolutionMode] = useState("observe");
   const [resolutionText, setResolutionText] = useState("");
   const [retryKey, setRetryKey] = useState(() => crypto.randomUUID());
-  const [follow, setFollow] = useState(true);
+  const { follow, setFollow } = events;
   const logViewport = useRef<HTMLDivElement>(null);
   const mutation = useMutation({
     mutationFn: async () => {
@@ -356,13 +352,8 @@ export function RunPage({ id }: { id: string }) {
     mutation.reset();
     setAction(value);
   }
-  const orderedEvents = [
-    ...new Map(
-      events.data?.pages
-        .flatMap((page) => page.events)
-        .map((event) => [event.sequence, event]) ?? [],
-    ).values(),
-  ].sort((a, b) => a.sequence - b.sequence);
+  const orderedEvents = events.data?.pages.flat() ?? [];
+  const firstShownSequence = orderedEvents[0]?.sequence ?? 0;
   const lastShownSequence = orderedEvents.at(-1)?.sequence ?? 0;
   const worker = workers.data?.find((value) => value.id === run.data?.workerId);
   const issue = issues.data?.find((value) => value.id === run.data?.issueId);
@@ -373,6 +364,17 @@ export function RunPage({ id }: { id: string }) {
       logViewport.current.scrollTop = logViewport.current.scrollHeight;
     }
   }, [follow, lastShownSequence]);
+  useEffect(() => {
+    if (
+      !follow &&
+      events.historyAfter !== null &&
+      events.dataUpdatedAt > 0 &&
+      logViewport.current
+    ) {
+      logViewport.current.scrollTop = 0;
+      logViewport.current.focus({ preventScroll: true });
+    }
+  }, [follow, events.historyAfter, events.dataUpdatedAt]);
   const actionTitles = {
     cancel: "取消执行",
     resolve: "处理阻塞",
@@ -509,7 +511,7 @@ export function RunPage({ id }: { id: string }) {
               </div>
               <div>
                 <span>已记录事件</span>
-                <strong>{run.data.lastSequence}</strong>
+                <strong>{events.latestSequence}</strong>
               </div>
               <div>
                 <span>执行结果</span>
@@ -581,21 +583,48 @@ export function RunPage({ id }: { id: string }) {
                     )}
                   </div>
                   <div className="log-footer">
-                    <span>
-                      已加载至事件 #{lastShownSequence} · 每段最多 100 条
+                    <span aria-live="polite">
+                      当前 #{firstShownSequence}–#{lastShownSequence} / 已记录 #
+                      {events.latestSequence} · 最多保留 5 页 / 500 条
+                      {events.isFetching ? " · 加载中…" : ""}
                     </span>
-                    {events.hasNextPage && (
+                    <nav className="log-navigation" aria-label="输出历史">
                       <button
                         className="button small"
                         type="button"
-                        disabled={events.isFetchingNextPage}
-                        onClick={() => void events.fetchNextPage()}
+                        disabled={firstShownSequence <= 1 || events.isFetching}
+                        onClick={() =>
+                          events.readHistory(
+                            Math.max(
+                              0,
+                              firstShownSequence - 1 - EVENT_PAGE_SIZE,
+                            ),
+                          )
+                        }
                       >
-                        {events.isFetchingNextPage
-                          ? "加载中…"
-                          : "加载下一段输出 ↓"}
+                        读取更早输出 ↑
                       </button>
-                    )}
+                      <button
+                        className="button small"
+                        type="button"
+                        disabled={
+                          follow ||
+                          events.isFetching ||
+                          lastShownSequence >= events.latestSequence
+                        }
+                        onClick={() => events.readHistory(lastShownSequence)}
+                      >
+                        读取后续输出 ↓
+                      </button>
+                      <button
+                        className="button small"
+                        type="button"
+                        disabled={follow}
+                        onClick={() => setFollow(true)}
+                      >
+                        返回最新输出
+                      </button>
+                    </nav>
                   </div>
                 </>
               )}

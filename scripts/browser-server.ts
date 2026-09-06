@@ -14,7 +14,7 @@ const webOrigin = "http://127.0.0.1:5174";
 const db = new Database(databaseUrl);
 await migrate(db.sql);
 await db.resetConnections();
-const app = createApp({ database: db, allowedOrigins: [webOrigin] });
+let app = createApp({ database: db, allowedOrigins: [webOrigin] });
 await app.listen({ hostname: "127.0.0.1", port: 3174, idleTimeout: 30 });
 const vite = Bun.spawn(
   [
@@ -136,7 +136,12 @@ class FixtureWorker {
         payload: { capacity: 1, currentRunId: this.currentRunId },
       });
   }
-  async event(runId: string, type: string, payload: Record<string, unknown>) {
+  async event(
+    runId: string,
+    type: string,
+    payload: Record<string, unknown>,
+    heartbeat = true,
+  ) {
     const sequence = (this.sequences.get(runId) ?? 0) + 1;
     await this.waitFor(
       (message) =>
@@ -157,7 +162,8 @@ class FixtureWorker {
       ["succeeded", "failed", "cancelled"].includes(String(payload.status))
     )
       this.currentRunId = null;
-    this.heartbeat();
+    if (heartbeat) this.heartbeat();
+    return sequence;
   }
   disconnect() {
     this.socket?.close();
@@ -200,9 +206,58 @@ const fixture = Bun.serve({
           String(body.type),
           body.payload as Record<string, unknown>,
         );
-      else if (path === "/disconnect") worker.disconnect();
+      else if (
+        path === "/events" &&
+        Array.isArray(body.events) &&
+        body.events.length <= 2000
+      ) {
+        let sequence = 0;
+        for (const event of body.events as {
+          type: string;
+          payload: Record<string, unknown>;
+        }[])
+          sequence = await worker.event(
+            String(body.runId),
+            event.type,
+            event.payload,
+            false,
+          );
+        worker.heartbeat();
+        return Response.json({ ok: true, sequence });
+      } else if (path === "/disconnect") worker.disconnect();
       else if (path === "/reconnect") await worker.connect();
-      else if (path === "/commands") return Response.json(worker.commands);
+      else if (path === "/restart-api") {
+        // Restart only this disposable fixture. Offline emulation can leave
+        // established SSE sockets open, so close the actual listener as well.
+        const abort = new AbortController();
+        const stream = await fetch(`${apiOrigin}/api/events`, {
+          signal: abort.signal,
+        });
+        const reader = stream.body?.getReader();
+        if (!reader) throw new Error("Missing upstream SSE probe");
+        const closed = (async () => {
+          while (!(await reader.read()).done) {
+            /* Observe actual upstream EOF. */
+          }
+          return "eof";
+        })().catch(() => "transport-error");
+        await app.stop();
+        const upstreamSseClosed = await Promise.race([
+          closed,
+          Bun.sleep(100).then(() => "still-open"),
+        ]);
+        abort.abort();
+        await reader.cancel().catch(() => {});
+        await db.resetConnections();
+        app = createApp({ database: db, allowedOrigins: [webOrigin] });
+        await app.listen({
+          hostname: "127.0.0.1",
+          port: 3174,
+          idleTimeout: 30,
+        });
+        await worker.connect();
+        return Response.json({ ok: true, upstreamSseClosed });
+      } else if (path === "/commands") return Response.json(worker.commands);
       else return new Response("Not found", { status: 404 });
       return Response.json({ ok: true });
     } catch (error) {

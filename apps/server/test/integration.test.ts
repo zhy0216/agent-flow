@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type {
+  ChangeEvent,
   EventPage,
   Issue,
   PairingCode,
@@ -627,5 +628,145 @@ suite("Zebra listener control channel and workspace API", () => {
     expect(reconnected.status).toBe(200);
     secondAbort.abort();
     await reconnected.body?.cancel().catch(() => {});
+  });
+  test("SSE event-type hints preserve legacy changes, durable cursors and replay acknowledgments", async () => {
+    const pairing = await api<PairingCode>("/api/workers/pairing", "POST", {});
+    const auth = await api<PairingResult>("/api/workers/pair", "POST", {
+      code: pairing.code,
+      name: "Hint worker",
+    });
+    const client = new WorkerClient(
+      auth.workerId,
+      `${base.replace("http:", "ws:")}/api/workers/connect`,
+      auth.token,
+    );
+    clients.push(client);
+    await client.register();
+    const project = await api<Project>("/api/projects", "POST", {
+      name: "Hints",
+      repoKey: "demo",
+    });
+    const issue = await api<Issue>("/api/issues", "POST", {
+      projectId: project.id,
+      title: "Hint compatibility",
+    });
+    const run = await api<Run>("/api/runs", "POST", {
+      issueId: issue.id,
+      workerId: auth.workerId,
+      idempotencyKey: crypto.randomUUID(),
+    });
+    const command = await client.next("run.submit");
+    client.send({
+      type: "command.ack",
+      runId: run.id,
+      payload: { commandId: command.requestId },
+    });
+    const abort = new AbortController();
+    const response = await fetch(`${base}/api/events`, {
+      signal: abort.signal,
+    });
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("Missing SSE reader");
+    const changes: ChangeEvent[] = [];
+    const reading = (async () => {
+      let buffer = "";
+      const decoder = new TextDecoder();
+      for (;;) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true });
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames)
+          if (frame.startsWith("data: "))
+            changes.push(JSON.parse(frame.slice(6)) as ChangeEvent);
+      }
+    })().catch((error: unknown) => {
+      if (!abort.signal.aborted) throw error;
+    });
+    async function waitFor(predicate: (change: ChangeEvent) => boolean) {
+      const deadline = Date.now() + 4000;
+      while (!changes.some(predicate) && Date.now() < deadline)
+        await Bun.sleep(10);
+      expect(changes.some(predicate)).toBe(true);
+    }
+    try {
+      const payloads = [
+        { type: "run.status", payload: { status: "running" } },
+        { type: "log", payload: { text: "Durable output" } },
+        { type: "agent.state", payload: { state: "working" } },
+        {
+          type: "run.status",
+          payload: {
+            status: "succeeded",
+            artifacts: [{ type: "checks", label: "Checks", value: "passed" }],
+          },
+        },
+      ];
+      const timestamp = new Date().toISOString();
+      for (const [index, payload] of payloads.entries()) {
+        client.send({
+          type: "run.event",
+          runId: run.id,
+          sequence: index + 1,
+          payload: { ...payload, timestamp },
+        });
+        expect((await client.next("event.ack")).sequence).toBe(index + 1);
+        await waitFor(
+          (change) =>
+            change.runId === run.id &&
+            change.sequence === index + 1 &&
+            change.eventType === payload.type,
+        );
+      }
+      client.send({
+        type: "run.event",
+        runId: run.id,
+        sequence: 2,
+        payload: {
+          type: "log",
+          timestamp,
+          payload: { text: "Durable output" },
+        },
+      });
+      expect((await client.next("event.ack")).sequence).toBe(4);
+      await waitFor(
+        (change) =>
+          change.runId === run.id &&
+          change.sequence === 4 &&
+          change.eventType === "log",
+      );
+      const first = await api<EventPage>(
+        `/api/runs/${run.id}/events?after=0&limit=2`,
+      );
+      const second = await api<EventPage>(
+        `/api/runs/${run.id}/events?after=${first.nextCursor}&limit=2`,
+      );
+      expect(first.hasMore).toBe(true);
+      expect(second.hasMore).toBe(false);
+      expect(
+        [...first.events, ...second.events].map((event) => event.sequence),
+      ).toEqual([1, 2, 3, 4]);
+      expect((await api<Run>(`/api/runs/${run.id}`)).artifacts).toEqual([
+        { type: "checks", label: "Checks", value: "passed" },
+      ]);
+      changes.length = 0;
+      await api(`/api/runs/${run.id}/review`, "POST", {
+        decision: "approve",
+        note: "Accepted",
+      });
+      await waitFor(
+        (change) =>
+          change.entity === "run" &&
+          change.id === run.id &&
+          change.eventType === undefined,
+      );
+      expect((await api<Issue>(`/api/issues/${issue.id}`)).status).toBe("done");
+    } finally {
+      abort.abort();
+      await reader.cancel().catch(() => {});
+      await reading;
+      client.close();
+    }
   });
 });

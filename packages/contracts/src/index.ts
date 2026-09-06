@@ -91,6 +91,8 @@ export interface ChangeEvent {
   id: string;
   runId?: string;
   sequence?: number;
+  /** Optional persisted event type hint; absent/unknown hints require snapshots. */
+  eventType?: string;
 }
 export interface CreateProject {
   name: string;
