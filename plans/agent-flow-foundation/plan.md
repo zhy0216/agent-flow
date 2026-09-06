@@ -2,6 +2,8 @@
 
 日期：2026-09-05。状态：M0–M6 已实现并通过本地验收，包括固定依赖的独立 checkout、数据库故障恢复、Chromium 和真实 Herdr/Codex 执行。本文保留首版目标与设计，当前实现和验证记录见 [验收记录](../../docs/acceptance.md)。
 
+> 历史版本说明：本文保留 2026-09-05 的设计选择与当时验收结果。其 Bun SQL/手写迁移描述不代表现行 persistence；业务与 worker 现已使用 Drizzle ORM 和版本迁移，见 [数据库开发](../../docs/database.md) 与 [2026-09-06 验收](../../docs/acceptance.md#2026-09-06-仓库改进验收)。
+
 ## 意图
 
 把任务管理与本地 coding agent 执行连接起来。Web 是类似 Linear 的工作空间，用来组织项目、任务、执行进度和人工介入；worker 作为 Bun 常驻进程运行在 Herdr pane 内，控制 Herdr 并承载 better-trigger durable workflow。工程采用 Bun + Turborepo，前端使用 React + Vite + TanStack，HTTP 服务使用 Zebra，DOM 测试使用 mad-dom。

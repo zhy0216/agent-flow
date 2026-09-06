@@ -40,7 +40,24 @@ DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/agent_flow_dev bun run 
 
 构建后的程序仍需要对应的 `drizzle/` 目录：worker 的 `dist/` 与 `drizzle/` 同级；server 将 `@agent-flow/db` 作为外部包加载，该包需保留 `src/` 和 `drizzle/`。
 
+## worker 待处理查询索引
+
+[0001_pending_queries.sql](../apps/worker/drizzle/0001_pending_queries.sql) 在原 baseline 后新增四个部分 B-tree 索引；定义与 [worker schema](../apps/worker/src/schema.ts) 一致，不包含 JSON payload：
+
+| 索引 | 键 | 只索引这些行 |
+| --- | --- | --- |
+| `events_unacknowledged` | `run_id, sequence` | `acknowledged = false` |
+| `commands_unhandled` | `worker_id, created_at, request_id` | `handled = false` |
+| `resolutions_unconsumed` | `run_id, created_at, request_id` | `consumed = false` |
+| `executions_active` | `worker_id` | `status NOT IN ('succeeded', 'failed', 'cancelled')` |
+
+迁移保留现有事件、operation、lease、runtime 身份与历史迁移；新库、旧 baseline 升级、pre-Drizzle 采用、重复和并发启动均有真实 PostgreSQL 回归。事件读取仍按 run/sequence 排序、最多 200 条，并隔离 worker 身份。
+
+本机同规模 fixture 的 EXPLAIN 显示，50,000 条已确认事件不再被逐条过滤；具体节点、buffer 与写入成本见 [本轮证据](evidence/repo-improvements-2026-09-06.md)。部分索引仍有写入维护成本，ACK 不等于立即回收磁盘空间。迁移采用事务中的普通 `CREATE INDEX`，建索引期间会阻塞对应表写入；大历史库启动升级需预留时间。本轮没有实施日志删除或归档。
+
 ## 查询约定
+
+业务事务按 project → issue → worker（需要时）→ run 的顺序加锁；提前读取归属后在取得锁时重新核对状态，保留连接 fencing 与原子 outbox。并发提交、状态回传、审核和删除的死锁回归使用真实 PostgreSQL 屏障。
 
 常规读写使用 `select/insert/update/delete` 构建器，事务使用 `orm.transaction`。公开 DTO 显式选取字段，避免返回删除标记或认证信息。PostgreSQL advisory lock、JSON 运算符和数据库时间保留参数化 SQL 表达式。
 

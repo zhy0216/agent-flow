@@ -1,3 +1,22 @@
+# 验收记录
+
+## 2026-09-06 仓库改进验收
+
+范围为 [repo-improvements 方案](../plans/repo-improvements/plan.md) 的 D01–D12，最终实现基线 `bf9b6c8e723b9af69d5289c1727d61f481071bac`。01–08 已由协调器核对 diff 并集成；09 更新说明和保存证据。九项任务的实际 commits、定向回归、查询计划、完整计数和日志定位见 [本轮脱敏摘要](evidence/repo-improvements-2026-09-06.md)。业务与 worker persistence 当前使用 Drizzle，见 [数据库开发](database.md)；下方 2026-09-05 的日期、结果和 proof 保留为历史，不代表本轮重跑。
+
+| 本轮 gate | 经协调器核对的本机结果 |
+| --- | --- |
+| 最终 `check` | `bf9b6c8` 退出 0，16.41s；setup 39 pass，普通测试 157 pass / 74 环境 skip，类型和构建通过；skip 不算 integration 通过 |
+| integration | `f19423d` 退出 0，78.43s；111 pass、1055 assertions；其后只改浏览器测试/05 todo，完整 diff 核对后复用，未声称在 `bf9b6c8` 重跑 |
+| 最终 Chromium | `bf9b6c8` 退出 0，15.67s，8 passed；覆盖命令格式、repo 能力、1303 事件的 500 条窗口、历史和 offline/online 恢复 |
+| 最终 audit / generate / frozen | `bf9b6c8` 均退出 0；官方 registry 147 packages 无漏洞，迁移生成无漂移，冻结安装 no changes |
+| 独立固定源码安装 | 08 的完整 `setup:deps` 25.23s、冻结安装均退出 0；最终安装输入与锁字节相同，复用已核对证据；原生 Rust 固定 1.93.1 |
+| 最终真实 Herdr | `bf9b6c8` 首次启动阶段失败；同提交未修改重试 72.45s 退出 0。真实文件、检查、worker 重启后同一 runtime、操作各一次、关闭和审核通过；proof 路径见摘要 |
+
+保留的边界：首次 Herdr 中 Codex 启动阶段被判 blocked，采集画面显示 MCP starting，prompt 尚未发送，尚未证明分类原因或修复；浏览器一直在线而只重启 API 时，默认代理未传播 SSE 断开，直连跨域诊断因 CORS 失败，未作为通过项。05 键盘动画测量曾使浏览器 gate 失败，测试等待稳定后定向和全量复验通过。环境告警和原始失败路径见摘要。本轮未运行远端 CI，未重跑 `worker:smoke`；D13–D16 roadmap 不实施。
+
+---
+
 # 首版验收记录
 
 日期：2026-09-05。范围为 [原方案](../plans/agent-flow-foundation/plan.md) 的 M0–M6：单用户、本地 worker、并发 1，单 Codex 执行后人工审核。远程多用户、团队权限、多机调度和自动交付仍属于原方案的 Roadmap。

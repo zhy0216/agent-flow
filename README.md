@@ -2,7 +2,7 @@
 
 面向本地 coding agent 的任务工作空间。通过 Web 创建项目与任务，选择 Herdr worker，查看实时执行、处理阻塞，再审核检查结果与改动。
 
-首版支持单用户、本地 worker、并发 1。执行通过检查后进入待审核，只有审核通过才将任务标记完成。连接断开不会把运行判定为成功或失败。
+首版支持单用户、本地 worker、每个 worker 并发 1。执行通过检查后进入待审核，只有审核通过才将任务标记完成。连接断开不会把运行判定为成功或失败。
 
 ## 准备
 
@@ -13,7 +13,7 @@ rustup toolchain install 1.93.1 --profile minimal
 bun run setup:deps
 ```
 
-`setup:deps` 从 HTTPS 获取固定 Git 版本，验证 mad-dom 补丁哈希，构建 better-trigger 和原生 DOM 模块，并执行冻结锁文件安装。无需相邻源码仓库、绝对路径或全局 Bun 链接。版本与更新方法见 [依赖说明](docs/dependencies.md)。
+`setup:deps` 从 HTTPS 获取固定 Git 版本，验证源码版本与指纹，构建 better-trigger 和原生 DOM 模块，并执行冻结锁文件安装。无需相邻源码仓库、绝对路径或全局 Bun 链接。版本与更新方法见 [依赖说明](docs/dependencies.md)。
 
 使用相邻 `../better-trigger`、`../mad-dom` 的开发者仍可运行 `bun run setup:local` 再 `bun install`；这会选择可变的本地构建，验收与 CI 使用 `setup:deps`。
 
@@ -50,13 +50,32 @@ bun run worker:start
 
 worker 默认将凭证存入权限为 `0600` 的 `~/.agent-flow/worker.json`，重启继续使用同一身份。`AGENT_FLOW_IDENTITY_FILE` 可选择另一份身份文件。配对码十分钟有效且仅可消费一次，服务端只保存凭证哈希。worker 主动建立经过 upgrade 身份校验的 WebSocket；浏览器不持有 worker token。
 
+同一身份文件的并发配对会在发送远端请求前被 `.pairing.lock` 排他锁拒绝，已有身份不会被覆盖。配对中断或远端成功但本地发布失败时，按错误提示核对锁记录和恢复候选文件；确认原进程已停止后再处理，勿直接删除锁或重复消费配对码。完整候选可通过 `AGENT_FLOW_IDENTITY_FILE` 恢复启动；凭证仅在本地核对，不打印或分享。
+
 ## 完成一次任务
 
-1. 新建项目，仓库标识填写配置中的 `my-app`。默认创建独立 worktree。可配置检查，每行一个 argv JSON 数组，例如 `["bun","test"]`；支持 `bun` 与 `git`。
-2. 新建任务，填写目标与验收条件，选择在线且空闲的 worker 发起执行。
+1. 新建项目，仓库标识填写配置中的 `my-app`。默认创建独立 worktree。可配置检查，每行一条命令文本，例如 `bun test` 或 `git diff --check`；支持 `bun` 与 `git`。
+2. 新建任务，填写目标与验收条件，选择已配置目标仓库、支持当前流程且在线空闲的 worker 发起执行。未匹配时选择器会显示“未配置仓库 my-app”等原因；API 在创建 run/outbox 前再次校验仓库能力，错误匹配返回 `409 worker_repo`。
 3. 在运行详情查看步骤、分段日志、连接状态和产物。Codex 默认使用 `workspace-write` 与 `on-request`，需要输入时进入阻塞状态。
 4. 查看实际提示，在“处理阻塞”中记录处理说明。可以重新观察状态，发送明确选择的 Enter/Escape，或向空闲的 agent 补充说明。
 5. 检查通过后审核产物。通过审核会完成任务；拒绝审核或执行失败后可以重试，保留原有历史。
+
+项目表单的检查输入示例：
+
+```text
+bun test
+git diff --check
+```
+
+HTTP 项目 DTO 的同一字段使用 argv 数组，例如：
+
+```json
+{"name":"My app","repoKey":"my-app","worktree":true,"checks":[["bun","test"],["git","diff","--check"]]}
+```
+
+命令不经过 shell。单引号保留原文，双引号支持 JSON 转义，`""` 表示空参数；未加引号的换行分隔命令，不支持管道或变量展开。最多 20 条检查，每条包含程序名在内共 1–50 个字符串，每项最多 1000 个字符且不能含 NUL；不合法的 HTTP 配置返回 400。检查输出分别保留 stdout 最后 2,000,000 字节、stderr 最后 200,000 字节，截断时显示提示；超时进入人工核对，不自动重跑。
+
+运行详情默认“跟随最新输出”，会跨页获取新事件。窗口最多保留 5 页、每页 100 条；关闭跟随后保持阅读位置，底部显示当前 sequence 范围。通过“读取更早输出 ↑”“读取后续输出 ↓”访问历史，或点击“返回最新输出”恢复跟随。窗口移出不删除持久事件。纯日志通知合并后只刷新增量输出，断线后通过 HTTP 快照和 cursor 补齐；代理下仅重启 API 的 SSE 断开传播仍有已知限制，见 [本轮验收](docs/acceptance.md#2026-09-06-仓库改进验收)。
 
 run、命令与事件均持久化。提交使用稳定幂等键，重连补发未确认命令和事件，sequence 防止重复或乱序投影。项目/任务删除会隐藏关联历史，保留内部记录以让丢失的 ACK 仍可收敛。
 
@@ -76,6 +95,8 @@ run、命令与事件均持久化。提交使用稳定幂等键，重连补发�
 
 ```sh
 bun run check
+bun run audit:deps
+bun run test:setup
 bun run worker:smoke
 
 # TEST_DATABASE_URL 的角色须有创建数据库权限；命令创建并清理独立数据库。
@@ -85,7 +106,7 @@ TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres bun run t
 TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres bun run test:herdr
 ```
 
-`check` 包含 lint、全部 TypeScript、单测/DOM 与生产构建。`worker:smoke` 需要 Herdr 和 `DATABASE_URL`，验证真实 embedded completed run。
+`check` 包含 lint、全部 TypeScript、安装保护回归（`test:setup`）、单测/DOM 与生产构建。`audit:deps` 显式使用官方 npm registry，独立于安装源；网络错误仍是失败。详情见 [依赖审计与安装回归](docs/dependencies.md#acceptance-gates)。`worker:smoke` 需要 Herdr 和 `DATABASE_URL`，验证真实 embedded completed run。
 
 数据库集成测试启动真实 Zebra listener 和 embedded runtime，验证 WS 身份、重连、事务、事件去重、锁，以及杀死子进程后的断点恢复。浏览器测试使用 Chromium、真实 API/SSE 和确定性的测试 worker。`test:herdr` 在当前 Herdr session 运行真实 Codex，验证 worktree、实际文件、检查、worker 强制重启、去重、关闭与审核，需要可用的 Codex 登录和 Herdr caller context。
 
@@ -106,4 +127,4 @@ scripts            固定依赖安装、隔离数据库与端到端验收
 
 默认仅监听 loopback，并限制浏览器来源。修改开发端口时同时设置 Web 的 `API_PROXY_TARGET` 与 API 的 `AGENT_FLOW_ALLOWED_ORIGINS`。构建使用同源 `/api`；静态托管需要代理该前缀并配置 SPA fallback。server 和 worker 的外部依赖仍须安装，Web 构建不包含数据库、Bun 或控制凭证。
 
-首版不包含团队权限、远程多用户、多机调度、计费、可视化流程编辑器或自动化交付。实现边界与验收证据见 [方案](plans/agent-flow-foundation/plan.md) 和 [验收记录](docs/acceptance.md)。
+首版不包含团队权限、远程多用户、多机调度、计费、可视化流程编辑器或自动化交付。[foundation 方案](plans/agent-flow-foundation/plan.md) 保留 2026-09-05 的历史设计（含当时的 Bun SQL 方案）；现行业务与 worker persistence 为 Drizzle。当前改进范围与证据见 [仓库改进方案](plans/repo-improvements/plan.md)、[数据库说明](docs/database.md) 和 [验收记录](docs/acceptance.md)。

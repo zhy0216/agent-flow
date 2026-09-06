@@ -33,19 +33,25 @@ For changes to a local technology stack, dispatch an agent through Herdr with it
 
 Once the upstream fix has a fetchable commit, update the Git revision in the dependency manifest and remove any patch entries and files superseded by that revision. Do not create or extend checked-in patches as a substitute for editing the local source repository. Rerun setup, then run all applicable acceptance commands. A changed revision or patch list produces a different generated checkout directory.
 
-The script records a fingerprint of the pinned checkout plus patch. On later runs, it refuses to overwrite unexpected local changes in that generated directory. Preserve any wanted edits before removing the reported directory and rerunning setup. Generated source and build output can otherwise be recreated by removing `.local-deps` and `node_modules`, then running `bun run setup:deps`.
+The script records a receipt and fingerprint of the pinned source inputs (the current manifest has empty patch lists). On later runs, it refuses to overwrite unexpected local changes in that generated directory. Preserve any wanted edits before removing the reported directory and rerunning setup. Generated source and build output can otherwise be recreated by removing `.local-deps` and `node_modules`, then running `bun run setup:deps`.
 
 `bun run setup:local` deliberately selects mutable neighboring repositories (or `BETTER_TRIGGER_SOURCE` / `MAD_DOM_SOURCE`) for upstream development. It registers their existing artifacts in this checkout's local Bun registry, then requires `bun install` to refresh consumers. This explicitly bypasses the pinned source manifest and patch checks. Its output is not reproducibility evidence; use `setup:deps` for clean-checkout verification and CI. Switching back to pinned mode may require removing `node_modules` so Bun replaces previous links.
 
 ## Acceptance gates
 
+`bun run audit:deps` audits the lockfile against the official npm registry without changing the installation registry. Network/registry errors remain failures. The lockfile uses a narrow `@esbuild-kit/core-utils` → `esbuild: 0.25.12` override to remove the affected esbuild 0.18.20 instance; Drizzle Kit remains 0.31.10. Config loading, migration generation, Node CJS/ESM compatibility and frozen installation were verified; see the [dated acceptance record](acceptance.md#2026-09-06-仓库改进验收) for the actual audit result. An audit result describes that run, not a permanent guarantee.
+
+`bun run test:setup` runs 39 fixture regressions and is included in `check`. Temporary Git/package fixtures cover source drift and damaged/missing receipts without overwriting bytes, path traversal and symlink escapes, wrong package identity/missing artifacts, failed staging cleanup and competing publication, consumer resolution, and separate checkout Bun registrations. These tests need neither network nor a full Rust build and do not mutate upstream repositories or the user global registry. The real pinned `setup:deps` build remains the success-path gate.
+
 ```sh
 bun run check
-TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/agent_flow_test bun run test:integration
+bun run test:setup
+bun run audit:deps
+TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres bun run test:integration
 bunx --no-install playwright install chromium
-TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/agent_flow_test bun run test:browser
+TEST_DATABASE_URL=postgres://postgres:postgres@127.0.0.1:5432/postgres bun run test:browser
 ```
 
 The database connection must permit creation and deletion of the isolated test databases. The explicit integration command rejects a missing connection instead of silently skipping database coverage. Browser tests use Chromium and real HTTP/WebSocket behavior; mad-dom tests do not establish layout, focus or browser integration correctness.
 
-[CI](../.github/workflows/check.yml) provisions PostgreSQL 15, builds the pinned source dependencies, and executes all three gates. A hosted CI machine has no user's Herdr session. The additional `bun run test:herdr` gate runs inside a Herdr-managed pane (`HERDR_ENV=1`) and exercises owned resources in that session. Hosted CI does not claim to execute that live Herdr gate.
+[CI](../.github/workflows/check.yml) provisions PostgreSQL 15, builds the pinned source dependencies, and executes dependency auditing, `check` (including setup regressions), integration and browser gates. A hosted CI machine has no user's Herdr session. The additional `bun run test:herdr` gate runs inside a Herdr-managed pane (`HERDR_ENV=1`) and exercises owned resources in that session. Hosted CI does not claim to execute that live Herdr gate.
