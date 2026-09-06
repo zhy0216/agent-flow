@@ -151,3 +151,29 @@ git diff --check
 6. 若修复属于本地技术栈/依赖源码，遵守根 AGENTS：通过 Herdr 将 agent 的 cwd 设为对应实际源码仓库（mad-dom 已知为 `/Users/yang/workspace/mad-dom`，其他先确认）；核对上游 diff/测试，用 `setup:local` 联调；只有已有可获取 commit/版本时更新锁定信息。不得编辑 `node_modules`、`.local-deps/sources` 或新增 `patches/*.patch` 作为交付。
 7. 本方案不要求修改 workflow 控制流；若实现确实需要改 `issue-agent/v1` 的 durable step 顺序，先确认活动运行并制定版本兼容方案，不能让活动运行遭遇无说明的 strict replay 漂移。
 8. roadmap 和未证实故障不会自动进入实现队列。文档更新保留历史日期、原结果和本轮未运行项，不将本机通过描述为远端 CI 已通过。
+
+## 执行结果
+
+2026-09-06：本轮从 `main` 的 `528847c3013635b709bb37dfcb887d6c874435cc` 开始，01–09 全部完成、复核、快进合入并清理。每项独立 worktree、一个最终任务 commit；协调器另提交本节收尾记录。实际集成顺序为 07 → 02 → 01 → 06 → 03 → 08 → 04 → 05 → 09，按开工时明确的 herdr-finish-plan 完成先后调度。
+
+所有任务均通过 Herdr 启动 Codex `gpt-6-astra`，显式使用 `--dangerously-bypass-approvals-and-sandbox`；实际推理强度与协调器亲跑的仓库级检查如下。
+
+| Todo / 已归档文件 | 最终 commit | 推理强度 | 协调器 check |
+| --- | --- | --- | --- |
+| [01-database-lock-order.md](todos/done/01-database-lock-order.md) | `77cf7da7ed152f55f7148884c17fa79569b2ac8b` | max | 退出 0，2.35s |
+| [02-worker-identity.md](todos/done/02-worker-identity.md) | `a4c4d8a5c2d475644aaa3d883ec4c945461702c4` | xhigh | 退出 0，2.33s |
+| [03-command-lifecycle.md](todos/done/03-command-lifecycle.md) | `6f687a1205a11cbd5fac307cda27baa7059937cb` | max | 退出 0，5.00s |
+| [04-submission-validation.md](todos/done/04-submission-validation.md) | `f6931b2f3e7305e3dc42f095f788db5bb4ba933e` | max | 退出 0，13.00s |
+| [05-realtime-logs.md](todos/done/05-realtime-logs.md) | `bf9b6c8e723b9af69d5289c1727d61f481071bac` | max | 退出 0，16.41s |
+| [06-worker-query-indexes.md](todos/done/06-worker-query-indexes.md) | `ffc505f79880692e3e959fe7023b7cf1633a0d12` | max | 退出 0，2.12s |
+| [07-dependency-audit.md](todos/done/07-dependency-audit.md) | `2688cbc015d745b3457996355dcd13cc67c3c110` | xhigh | 退出 0，2.14s |
+| [08-setup-regressions.md](todos/done/08-setup-regressions.md) | `364acc410019ef4bd5236b16b940818614e9dcd7` | xhigh | 退出 0，13.55s |
+| [09-docs-and-acceptance.md](todos/done/09-docs-and-acceptance.md) | `75e7f202e9ecd280d22ca97b045fcfefec93d778` | high | 退出 0，15.66s |
+
+最终实现 `bf9b6c8` 上，协调器 check、Chromium 8 项、官方 registry 审计（147 packages，无漏洞）、schema 生成、冻结安装及真实 Herdr gate 均通过。数据库 integration 在 `f19423d` 上 111 pass / 1055 assertions；其后仅浏览器测试及文档变化，已核对完整 diff 并复用结果。独立固定源码安装与最终安装输入及锁文件字节一致，复用 08 的完整构建结果。09 的文档提交再次由协调器运行 check。普通 check 中的环境 skip 不计为数据库或真实 Herdr 通过，未声称执行远端 CI。
+
+各项回归、查询计划/写入成本、命令及证据复用关系见 [本轮验收摘要](../../docs/evidence/repo-improvements-2026-09-06.md) 和 [验收记录](../../docs/acceptance.md)。真实 Herdr proof 验证 worker 强制重启后沿用同一 runtime、真实文件与检查、各一次的 owned 操作、关闭和审核。
+
+本轮无未完成 todo。D13–D16（服务端分页、历史保留、模块拆分、背压/慢消费者）按原范围 deferred。已知边界保留：仅重启 API 时默认代理的 SSE 断开未传播；跨域直连 SSE 的 CORS 诊断失败；真实 Herdr 首次启动被判 blocked，同提交重试通过，未宣称启动异常已修复。浏览器键盘测量失败已定位并修正，保留原失败及复验记录。
+
+九项任务的 Herdr workspace、Git worktree 和本地任务分支均已清理；未操作其他会话资源。真实 Herdr 成功/失败 fixture、独立固定安装验证 checkout 与本机临时日志为验收证据保留，具体路径见摘要。未 push、创建 PR 或修改远端状态。
